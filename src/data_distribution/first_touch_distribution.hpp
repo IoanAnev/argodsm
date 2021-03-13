@@ -8,7 +8,6 @@
 #define argo_first_touch_distribution_hpp argo_first_touch_distribution_hpp
 
 #include <mutex>
-#include <iostream>
 
 #include "base_distribution.hpp"
 
@@ -21,16 +20,21 @@ namespace argo {
 	/* forward argo::backend function declarations */
 	namespace backend {
 		node_id_t node_id();
-		std::size_t& backing_offset();
 		/* forward argo::backend::atomic function declarations */
 		namespace atomic {
-			void _store_public_dir(const void* desired,
+			void _store_public_owners_dir(const void* desired,
 				const std::size_t size, const std::size_t rank, const std::size_t disp);
-			void _store_local_dir(const std::size_t desired,
+			void _store_local_owners_dir(const std::size_t desired,
 				const std::size_t rank, const std::size_t disp);
-			void _load_local_dir(void* output_buffer,
+			void _store_local_offsets_tbl(const std::size_t desired,
 				const std::size_t rank, const std::size_t disp);
-			void _compare_exchange_dir(const void* desired, const void* expected, void* output_buffer,
+			void _load_local_owners_dir(void* output_buffer,
+				const std::size_t rank, const std::size_t disp);
+			void _load_local_offsets_tbl(void* output_buffer,
+				const std::size_t rank, const std::size_t disp);
+			void _compare_exchange_owners_dir(const void* desired, const void* expected, void* output_buffer,
+				const std::size_t size, const std::size_t rank, const std::size_t disp);
+			void _compare_exchange_offsets_tbl(const void* desired, const void* expected, void* output_buffer,
 				const std::size_t size, const std::size_t rank, const std::size_t disp);
 		} // namespace atomic
 	} // namespace backend
@@ -41,6 +45,8 @@ namespace argo {
 		/**
 		 * @brief the first-touch data distribution
 		 * @details gives ownership of a page to the node that first touched it.
+		 * @note if a node's backing store size is not sufficient, it passes the
+		 *       ownership of the page to a node that can host it.
 		 */
 		template<int instance>
 		class first_touch_distribution : public base_distribution<instance> {
@@ -48,32 +54,32 @@ namespace argo {
 				/**
 				 * @brief try and claim ownership of a page
 				 * @param addr address in the global address space
-				 * @return the homenode of addr
 				 */
-				static std::size_t first_touch (const std::size_t& addr);
-				/** @brief protects the owner directory */
-				std::mutex owner_mutex;
+				static void first_touch (const std::size_t& addr);
+				/** @brief protects the owners directory */
+				std::mutex owners_mutex;
 
 			public:
 				virtual node_id_t homenode (char* const ptr) {
-					std::size_t homenode_bit_id;
+					std::size_t homenode, ownership;
+					static const std::size_t rank = argo::backend::node_id();
+					static const std::size_t global_null = base_distribution<instance>::total_size + 1;
 					const std::size_t addr = (ptr - base_distribution<instance>::start_address) / granularity * granularity;
-					const std::size_t owner_window_index = 2 * (addr / granularity);
+					const std::size_t owners_dir_window_index = 3 * (addr / granularity);
 
-					std::unique_lock<std::mutex> def_lock(owner_mutex, std::defer_lock);
+					std::unique_lock<std::mutex> def_lock(owners_mutex, std::defer_lock);
 					def_lock.lock();
-					argo::backend::atomic::_load_local_dir(&homenode_bit_id, argo::backend::node_id(), owner_window_index);
-					if (!homenode_bit_id) { homenode_bit_id = first_touch(addr); }
+					/* fetch the ownership value for the page from the local window */
+					argo::backend::atomic::_load_local_owners_dir(&ownership, rank, owners_dir_window_index+2);
+					/* if there has been no attempt in claiming this page, try to claim it */
+					if (ownership == global_null) { first_touch(addr); }
+					/* spin in case an update from a remote node has not been reflected in the local window */
+					do {
+						argo::backend::atomic::_load_local_owners_dir(&homenode, rank, owners_dir_window_index);
+					} while (homenode == global_null);
 					def_lock.unlock();
 
-					node_id_t n, homenode;
-					for(n = 0; n < base_distribution<instance>::nodes; n++) {
-						if((1UL << n) == homenode_bit_id) {
-							homenode = n;
-						}
-					}
-
-					if(homenode >= static_cast<node_id_t>(base_distribution<instance>::nodes)) {
+					if(homenode >= static_cast<std::size_t>(base_distribution<instance>::nodes)) {
 						exit(EXIT_FAILURE);
 					}
 					return homenode;
@@ -81,26 +87,22 @@ namespace argo {
 
 				virtual std::size_t local_offset (char* const ptr) {
 					std::size_t offset;
+					static const std::size_t rank = argo::backend::node_id();
 					static const std::size_t global_null = base_distribution<instance>::total_size + 1;
 					const std::size_t drift = (ptr - base_distribution<instance>::start_address) % granularity;
 					const std::size_t addr = (ptr - base_distribution<instance>::start_address) / granularity * granularity;
-					const std::size_t owner_window_index = 2 * (addr / granularity);
+					const std::size_t owners_dir_window_index = 3 * (addr / granularity);
 
-					std::unique_lock<std::mutex> def_lock(owner_mutex, std::defer_lock);
+					std::unique_lock<std::mutex> def_lock(owners_mutex, std::defer_lock);
 					def_lock.lock();
-					/* spin till an update from a remote node has been reflected in the local window */
+					/* spin in case an update from a remote node has not been reflected in the local window */
 					do {
-						argo::backend::atomic::_load_local_dir(&offset, argo::backend::node_id(), owner_window_index+1);
-					} while(offset == global_null);
+						argo::backend::atomic::_load_local_owners_dir(&offset, rank, owners_dir_window_index+1);
+					} while (offset == global_null);
 					def_lock.unlock();
 					offset += drift;
 
-					if(offset >= static_cast<std::size_t>(base_distribution<instance>::size_per_node)) {
-						std::cerr << "Maximum backing store size exceeded on node "
-								<< argo::backend::node_id() << "\n"
-								<< "\t- allocate more distributed memory or\n"
-								<< "\t- ensure better distribution of data"
-								<< std::endl;
+					if(offset >= base_distribution<instance>::size_per_node) {
 						exit(EXIT_FAILURE);
 					}
 					return offset;
@@ -108,40 +110,57 @@ namespace argo {
 		};
 
 		template<int instance>
-		std::size_t first_touch_distribution<instance>::first_touch (const std::size_t& addr) {
+		void first_touch_distribution<instance>::first_touch (const std::size_t& addr) {
 			/* variables for CAS */
-			std::size_t homenode_bit_id, result;
-			constexpr std::size_t compare = 0;
-			const std::size_t id = 1UL << argo::backend::node_id();
-			const std::size_t owner_window_index = 2 * (addr / granularity);
+			std::size_t offset, homenode, result;
+			static const std::size_t rank = argo::backend::node_id();
+			static const std::size_t global_null = base_distribution<instance>::total_size + 1;
+			const std::size_t owners_dir_window_index = 3 * (addr / granularity);
+			/* decentralize CAS */
+			const std::size_t cas_node = (addr / granularity) % base_distribution<instance>::nodes;
 	    
-			/* check/try to acquire ownership of the page with CAS to process' 0 index */
-			argo::backend::atomic::_compare_exchange_dir(&id, &compare, &result, sizeof(std::size_t), 0, owner_window_index);
+			/* check/try to acquire ownership of the page with CAS to process' cas_node index */
+			argo::backend::atomic::_compare_exchange_owners_dir(&rank, &global_null, &result, sizeof(std::size_t), cas_node, owners_dir_window_index+2);
 
-			/* this process was the first one to deposit the id */
-			if (result == 0) {
-				homenode_bit_id = id;
+			/* this process was the first one to deposit its rank */
+			if (result == global_null) {
+				/* iterate through the nodes to find a valid offset for the page, starting from the currently running one */
+				std::size_t n, searched;
+				for(n = rank, searched = 0; searched < static_cast<std::size_t>(base_distribution<instance>::nodes);
+						n = (n + 1) % base_distribution<instance>::nodes, searched++) {
+					bool succeeded = false;
+					/* load backing offset for the node from the offsets table */
+					argo::backend::atomic::_load_local_offsets_tbl(&offset, rank, n);
+					/* check if the backing store size of this node is sufficient */
+					while (offset < base_distribution<instance>::size_per_node) {
+						/* try to claim a valid offset */
+						const std::size_t incr_offset = offset + granularity;
+						argo::backend::atomic::_compare_exchange_offsets_tbl(&incr_offset, &offset, &result, sizeof(std::size_t), n, n);
+						if (result == offset) { succeeded = true; homenode = n; break; }
+						offset = result;
+					}
+					/* cache the offset returned from a remote CAS operation */
+					if (n != rank) {
+						argo::backend::atomic::_store_local_offsets_tbl(offset, rank, n);
+					}
+					/* succeeded, leave */
+					if (succeeded) break;
+				}
 
 				/* mark the page in the local window */
-				argo::backend::atomic::_store_local_dir(id, argo::backend::node_id(), owner_window_index);
-				argo::backend::atomic::_store_local_dir(argo::backend::backing_offset(), argo::backend::node_id(), owner_window_index+1);
+				argo::backend::atomic::_store_local_owners_dir(homenode, rank, owners_dir_window_index);
+				argo::backend::atomic::_store_local_owners_dir(offset, rank, owners_dir_window_index+1);
+				argo::backend::atomic::_store_local_owners_dir(rank, rank, owners_dir_window_index+2);
 
 				/* mark the page in the public windows */
-				node_id_t n;
-				for(n = 0; n < base_distribution<instance>::nodes; n++) {
-					if (n != argo::backend::node_id()) {
-						argo::backend::atomic::_store_public_dir(&id, sizeof(std::size_t), n, owner_window_index);
-						argo::backend::atomic::_store_public_dir(&argo::backend::backing_offset(), sizeof(std::size_t), n, owner_window_index+1);
+				for(n = 0; n < static_cast<std::size_t>(base_distribution<instance>::nodes); n++) {
+					if (n != rank) {
+						argo::backend::atomic::_store_public_owners_dir(&homenode, sizeof(std::size_t), n, owners_dir_window_index);
+						argo::backend::atomic::_store_public_owners_dir(&offset, sizeof(std::size_t), n, owners_dir_window_index+1);
+						argo::backend::atomic::_store_public_owners_dir(&rank, sizeof(std::size_t), n, owners_dir_window_index+2);
 					}
 				}
-		
-				/* since a new page was acquired increase the homenode offset */
-				argo::backend::backing_offset() += granularity;
-			} else {
-				homenode_bit_id = result;
 			}
-			
-			return homenode_bit_id;
 		}
 	} // namespace data_distribution
 } // namespace argo
