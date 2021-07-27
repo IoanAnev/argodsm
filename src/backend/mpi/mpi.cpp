@@ -314,7 +314,19 @@ namespace argo {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the compare-and-swap operation
 				MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, 0, owners_dir_window);
-				MPI_Compare_and_swap(desired, expected, output_buffer, t_type, rank, disp, owners_dir_window);
+				/**
+				 * @note This if-case circumvents a bug in multiple OpenMPI versions
+				 * for which MPI_Compare_and_swap segfaults when operating on the
+				 * local node. Should probably be removed eventually.
+				 */
+				if(rank == node_id()) {
+					memcpy(output_buffer,&global_owners_dir[disp],size);
+					if(!memcmp(expected,&global_owners_dir[disp],size)) {
+						memcpy(&global_owners_dir[disp],desired,size);
+					}
+				}else{
+					MPI_Compare_and_swap(desired, expected, output_buffer, t_type, rank, disp, owners_dir_window);
+				}
 				MPI_Win_unlock(rank, owners_dir_window);
 			}
 
@@ -323,7 +335,19 @@ namespace argo {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the compare-and-swap operation
 				MPI_Win_lock(MPI_LOCK_EXCLUSIVE, rank, 0, offsets_tbl_window);
-				MPI_Compare_and_swap(desired, expected, output_buffer, t_type, rank, disp, offsets_tbl_window);
+				/**
+				 * @note This if-case circumvents a bug in multiple OpenMPI versions
+				 * for which MPI_Compare_and_swap segfaults when operating on the
+				 * local node. Should probably be removed eventually.
+				 */
+				if(rank == node_id()) {
+					memcpy(output_buffer,&global_offsets_tbl[disp],size);
+					if(!memcmp(expected,&global_offsets_tbl[disp],size)) {
+						memcpy(&global_offsets_tbl[disp],desired,size);
+					}
+				}else{
+					MPI_Compare_and_swap(desired, expected, output_buffer, t_type, rank, disp, offsets_tbl_window);
+				}
 				MPI_Win_unlock(rank, offsets_tbl_window);
 			}
 
