@@ -47,8 +47,14 @@ argo_byte * touchedcache;
 char* cacheData;
 /** @brief Copy of the local cache to keep twinpages for later being able to DIFF stores */
 char * pagecopy;
+/** @brief Pointer to locks protecting the page cache */
+std::vector<cache_lock> cache_locks;
+/** @brief Mutex ensuring that only one thread can perform sync */
+//std::shared_mutex sync_mutex;
+pthread_rwlock_t sync_lock = PTHREAD_RWLOCK_INITIALIZER;
+
 /** @brief Protects the pagecache */
-pthread_mutex_t cachemutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t cachemutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*Writebuffer*/
 /** @brief A write buffer storing cache indices */
@@ -82,8 +88,6 @@ int workrank;
 /** @brief tracking which windows are used for reading and writing global address space*/
 char * barwindowsused;
 /** @brief Semaphore protecting infiniband accesses*/
-/** @todo replace with a (qd?)lock */
-sem_t ibsem;
 
 /*Loading and Prefetching*/
 /**
@@ -170,14 +174,12 @@ int argo_get_global_tid(){
 
 void argo_register_thread(){
 	int i;
-	sem_wait(&ibsem);
 	for(i = 0; i < NUM_THREADS; i++){
 		if(tid[i] == 0){
 			tid[i] = pthread_self();
 			break;
 		}
 	}
-	sem_post(&ibsem);
 	pthread_barrier_wait(&threadbarrier[NUM_THREADS]);
 }
 
@@ -187,7 +189,6 @@ void argo_pin_threads(){
   cpu_set_t cpuset;
   int s;
   argo_register_thread();
-  sem_wait(&ibsem);
   CPU_ZERO(&cpuset);
   int pinto = argo_get_local_tid();
   CPU_SET(pinto, &cpuset);
@@ -197,7 +198,6 @@ void argo_pin_threads(){
     printf("PINNING ERROR\n");
     argo_finalize();
   }
-  sem_post(&ibsem);
 }
 
 
@@ -276,10 +276,8 @@ void handler(int sig, siginfo_t *si, void *context){
 	std::size_t offset;
 	if(dd::is_first_touch_policy()){
 		std::lock_guard<std::mutex> lock(spin_mutex);
-		sem_wait(&ibsem);
 		homenode = get_homenode(aligned_access_offset);
 		offset = get_offset(aligned_access_offset);
-		sem_post(&ibsem);
 	}else{
 		homenode = get_homenode(aligned_access_offset);
 		offset = get_offset(aligned_access_offset);
@@ -288,12 +286,16 @@ void handler(int sig, siginfo_t *si, void *context){
 	unsigned long id = static_cast<unsigned long>(1) << getID();
 	unsigned long invid = ~id;
 
-	pthread_mutex_lock(&cachemutex);
+	//pthread_mutex_lock(&cachemutex);
+	/* Acquire shared sync lock and first cache index lock */
+	//sync_mutex.shared_lock();
+	pthread_rwlock_rdlock(&sync_lock);
+	cache_locks[startIndex].lock();
+
 
 	/* page is local */
 	if(homenode == (getID())){
 		int n;
-		sem_wait(&ibsem);
 		unsigned long sharers;
 		MPI_Win_lock(MPI_LOCK_SHARED, workrank, 0, sharerWindow);
 		unsigned long prevsharer = (globalSharers[classidx])&id;
@@ -370,8 +372,11 @@ void handler(int sig, siginfo_t *si, void *context){
 			vm::map_memory(aligned_access_ptr, pagesize*CACHELINE, cacheoffset+offset, PROT_READ|PROT_WRITE);
 
 		}
-		sem_post(&ibsem);
-		pthread_mutex_unlock(&cachemutex);
+		//pthread_mutex_unlock(&cachemutex);
+		/* Unlock shared sync lock and cache index lock */
+		cache_locks[startIndex].unlock();
+		//sync_mutex.unlock_shared();
+		pthread_rwlock_unlock(&sync_lock);
 		return;
 	}
 
@@ -392,7 +397,9 @@ void handler(int sig, siginfo_t *si, void *context){
 		(miss_type == sig::access_type::undefined && performed_load)) {
 		assert(cacheControl[startIndex].state == VALID);
 		assert(cacheControl[startIndex].tag == aligned_access_offset);
-		pthread_mutex_unlock(&cachemutex);
+		//pthread_mutex_unlock(&cachemutex);
+		//sync_mutex.unlock_shared();
+		pthread_rwlock_unlock(&sync_lock);
 		double t2 = MPI_Wtime();
 		stats.loadtime+=t2-t1;
 		return;
@@ -402,14 +409,16 @@ void handler(int sig, siginfo_t *si, void *context){
 	line *= CACHELINE;
 
 	if(cacheControl[line].dirty == DIRTY){
-		pthread_mutex_unlock(&cachemutex);
+		//pthread_mutex_unlock(&cachemutex);
+		cache_locks[startIndex].unlock();
+		//sync_mutex.unlock_shared();
+		pthread_rwlock_unlock(&sync_lock);
 		return;
 	}
 
 	touchedcache[line] = 1;
 	cacheControl[line].dirty = DIRTY;
 
-	sem_wait(&ibsem);
 	MPI_Win_lock(MPI_LOCK_SHARED, workrank, 0, sharerWindow);
 	unsigned long writers = globalSharers[classidx+1];
 	unsigned long sharers = globalSharers[classidx];
@@ -460,9 +469,11 @@ void handler(int sig, siginfo_t *si, void *context){
 	unsigned char * copy = (unsigned char *)(pagecopy + line*pagesize);
 	memcpy(copy,aligned_access_ptr,CACHELINE*pagesize);
 	argo_write_buffer->add(startIndex);
-	sem_post(&ibsem);
 	mprotect(aligned_access_ptr, pagesize*CACHELINE,PROT_WRITE|PROT_READ);
-	pthread_mutex_unlock(&cachemutex);
+	//pthread_mutex_unlock(&cachemutex);
+	cache_locks[startIndex].unlock();
+	//sync_mutex.unlock_shared();
+	pthread_rwlock_unlock(&sync_lock);
 	double t2 = MPI_Wtime();
 	stats.storetime += t2-t1;
 	return;
@@ -497,6 +508,8 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 
 	/* If it's not an ArgoDSM address, do not handle it */
 	if(aligned_access_offset >= size_of_all){
+		//TODO: Must probably unlock here?
+		printf("WARNING: UNSAFE CASE!!!\n");
 		return;
 	}
 
@@ -515,12 +528,11 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 	const argo::node_id_t load_node = get_homenode(aligned_access_offset);
 	const std::size_t load_offset = get_offset(aligned_access_offset);
 
-	sem_wait(&ibsem);
 
 	/* Return if requested cache entry is already up to date. */
 	if(cacheControl[start_index].tag == aligned_access_offset &&
 			cacheControl[start_index].state != INVALID){
-		sem_post(&ibsem);
+		cache_locks[start_index].unlock();
 		return;
 	}
 
@@ -569,12 +581,18 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 		/* Address and pointer to the data being loaded */
 		const std::size_t temp_addr = aligned_access_offset + p*block_size;
 
-		/* Skip updating pages that are already present and valid in the cache */
-		if(cacheControl[idx].tag == temp_addr && cacheControl[idx].state != INVALID){
+		if(cache_locks[idx].try_lock() || idx == start_index){
+			/* Skip updating pages that are already present and valid in the cache */
+			if(cacheControl[idx].tag == temp_addr && cacheControl[idx].state != INVALID){
+				pages_to_load[p] = false;
+				cache_locks[idx].unlock();
+				continue;
+			}else{
+				pages_to_load[p] = true;
+			}
+		}else{
 			pages_to_load[p] = false;
 			continue;
-		}else{
-			pages_to_load[p] = true;
 		}
 
 		/* If another page occupies the cache index, begin to evict it. */
@@ -723,9 +741,9 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 			touchedcache[idx] = 1;
 			cacheControl[idx].state = VALID;
 			cacheControl[idx].dirty=CLEAN;
+			cache_locks[idx].unlock();
 		}
 	}
-	sem_post(&ibsem);
 }
 
 
@@ -844,6 +862,9 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 	cachesize = std::max(cachesize, static_cast<unsigned long>(pagesize*CACHELINE*2));
 	cachesize /= pagesize;
 
+	/* Create the cache locks */
+	cache_locks.resize(cachesize);
+
 	classificationSize = 2*(argo_size/pagesize);
 	argo_write_buffer = new write_buffer<std::size_t>();
 
@@ -943,7 +964,6 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 		vm::map_memory(tmpcache, offsets_tbl_size_bytes, current_offset, PROT_READ|PROT_WRITE);
 	}
 
-	sem_init(&ibsem,0,1);
 	sem_init(&globallocksem,0,1);
 
 	allocationOffset = (unsigned long *)calloc(1,sizeof(unsigned long));
@@ -1076,13 +1096,15 @@ void swdsm_argo_barrier(int n){ //BARRIER
 
 	if(pthread_mutex_trylock(&barriermutex) == 0){
 		barrierlockholder = pthread_self();
-		pthread_mutex_lock(&cachemutex);
-		sem_wait(&ibsem);
+		//pthread_mutex_lock(&cachemutex);
+		//sync_mutex.lock();
+		pthread_rwlock_wrlock(&sync_lock);
 		argo_write_buffer->flush();
 		MPI_Barrier(workcomm);
 		self_invalidation();
-		sem_post(&ibsem);
-		pthread_mutex_unlock(&cachemutex);
+		//pthread_mutex_unlock(&cachemutex);
+		//sync_mutex.unlock()
+		pthread_rwlock_unlock(&sync_lock);
 	}
 
 	pthread_barrier_wait(&threadbarrier[n]);
@@ -1100,7 +1122,6 @@ void argo_reset_coherence(int n){
 	stats.stores = 0;
 	memset(touchedcache, 0, cachesize);
 
-	sem_wait(&ibsem);
 	MPI_Win_lock(MPI_LOCK_EXCLUSIVE, workrank, 0, sharerWindow);
 	for(j = 0; j < classificationSize; j++){
 		globalSharers[j] = 0;
@@ -1124,7 +1145,6 @@ void argo_reset_coherence(int n){
 		}
 		MPI_Win_unlock(workrank, offsets_tbl_window);
 	}
-	sem_post(&ibsem);
 	swdsm_argo_barrier(n);
 	mprotect(startAddr,size_of_all,PROT_NONE);
 	swdsm_argo_barrier(n);
@@ -1133,23 +1153,27 @@ void argo_reset_coherence(int n){
 
 void argo_acquire(){
 	int flag;
-	pthread_mutex_lock(&cachemutex);
-	sem_wait(&ibsem);
+	//pthread_mutex_lock(&cachemutex);
+	//sync_mutex.lock();
+	pthread_rwlock_wrlock(&sync_lock);
 	self_invalidation();
 	MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,workcomm,&flag,MPI_STATUS_IGNORE);
-	sem_post(&ibsem);
-	pthread_mutex_unlock(&cachemutex);
+	//pthread_mutex_unlock(&cachemutex);
+	//sync_mutex.unlock();
+	pthread_rwlock_unlock(&sync_lock);
 }
 
 
 void argo_release(){
 	int flag;
-	pthread_mutex_lock(&cachemutex);
-	sem_wait(&ibsem);
+	//pthread_mutex_lock(&cachemutex);
+	//sync_mutex.lock();
+	pthread_rwlock_wrlock(&sync_lock);
 	argo_write_buffer->flush();
 	MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,workcomm,&flag,MPI_STATUS_IGNORE);
-	sem_post(&ibsem);
-	pthread_mutex_unlock(&cachemutex);
+	//pthread_mutex_unlock(&cachemutex);
+	//sync_mutex.unlock();
+	pthread_rwlock_unlock(&sync_lock);
 }
 
 void argo_acq_rel(){
