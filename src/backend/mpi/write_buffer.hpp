@@ -148,7 +148,6 @@ class write_buffer
 		/**
 		 * @brief	Flushes first _write_back_size elements of the  ArgoDSM 
 		 * 			write buffer to memory
-		 * @pre		Require ibsem to be taken until parallel MPI
 		 * @pre		Require write_buffer_mutex to be held
 		 */
 		void flush_partial() {
@@ -238,7 +237,6 @@ class write_buffer
 
 		/**
 		 * @brief	Flushes the ArgoDSM write buffer to memory
-		 * @pre		Require ibsem to be taken until parallel MPI
 		 */
 		void flush() {
 			double t_start = MPI_Wtime();
@@ -283,7 +281,6 @@ class write_buffer
 		/**
 		 * @brief	Adds a new element to the write buffer
 		 * @param	val The value of type T to add to the buffer
-		 * @pre		Require ibsem to be taken until parallel MPI
 		 */
 		void add(T val) {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
