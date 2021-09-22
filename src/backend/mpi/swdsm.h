@@ -32,6 +32,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <mutex>
+#include <functional>
 //#include <shared_mutex>
 
 #include "argo.h"
@@ -405,5 +406,16 @@ unsigned long get_classification_index(uint64_t addr);
  * @todo This should be moved in to a dedicated cache class
  */
 bool _is_cached(std::size_t addr);
-#endif /* argo_swdsm_h */
 
+/**
+ * @brief TODO
+ */
+void sharer_op(int lock_type, int rank, int offset,
+		std::function<void(const std::size_t window_index)> op);
+
+/**
+ * @brief TODO
+ */
+std::size_t get_window_index(int offset);
+std::size_t get_window_offset(int classification_index);
+#endif /* argo_swdsm_h */

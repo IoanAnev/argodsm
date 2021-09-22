@@ -52,11 +52,7 @@ std::size_t win_granularity;
 /** @brief Pointer to locks protecting the page cache */
 std::vector<cache_lock> cache_locks;
 /** @brief Mutex ensuring that only one thread can perform sync */
-//std::shared_mutex sync_mutex;
 pthread_rwlock_t sync_lock = PTHREAD_RWLOCK_INITIALIZER;
-
-/** @brief Protects the pagecache */
-//pthread_mutex_t cachemutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*Writebuffer*/
 /** @brief A write buffer storing cache indices */
@@ -72,7 +68,7 @@ MPI_Group workgroup;
 /** @brief Communicator can be replaced with MPI_COMM_WORLD*/
 MPI_Comm workcomm;
 /** @brief MPI window for communicating pyxis directory*/
-MPI_Win sharerWindow;
+std::vector<MPI_Win> sharer_windows;
 /** @brief MPI window for communicating global locks*/
 MPI_Win lockWindow;
 /** @brief MPI windows for reading and writing data in global address space */
@@ -89,7 +85,6 @@ int rank;
 int workrank;
 /** @brief tracking which windows are used for reading and writing global address space*/
 char * barwindowsused;
-/** @brief Semaphore protecting infiniband accesses*/
 
 /*Loading and Prefetching*/
 /**
@@ -99,7 +94,13 @@ char * barwindowsused;
  */
 void load_cache_entry(std::size_t aligned_access_offset);
 
-/*Global lock*/
+//void sharer_op(int lock_type, int rank, int offset,
+//		std::function<void(const std::size_t win_index)> op);
+//
+//std::size_t get_window_index(int offset);
+
+
+	/*Global lock*/
 /** @brief  Local flags we spin on for the global lock*/
 unsigned long * lockbuffer;
 /** @brief  Protects the global lock so only 1 thread can have a global lock at a time */
@@ -287,27 +288,30 @@ void handler(int sig, siginfo_t *si, void *context){
 
 	unsigned long id = static_cast<unsigned long>(1) << getID();
 	unsigned long invid = ~id;
+	std::size_t win_offset = get_window_offset(classidx);
 
-	//pthread_mutex_lock(&cachemutex);
 	/* Acquire shared sync lock and first cache index lock */
-	//sync_mutex.shared_lock();
 	pthread_rwlock_rdlock(&sync_lock);
 	cache_locks[startIndex].lock();
-
 
 	/* page is local */
 	if(homenode == (getID())){
 		int n;
-		unsigned long sharers;
-		MPI_Win_lock(MPI_LOCK_SHARED, workrank, 0, sharerWindow);
-		unsigned long prevsharer = (globalSharers[classidx])&id;
-		MPI_Win_unlock(workrank, sharerWindow);
-
+		unsigned long sharers, prevsharer;
+		{
+			auto op = [&](std::size_t win_index) {
+				prevsharer = (globalSharers[classidx])&id;
+			};
+			sharer_op(MPI_LOCK_SHARED, workrank, classidx, op);
+		}
 		if(prevsharer != id){
-			MPI_Win_lock(MPI_LOCK_EXCLUSIVE, workrank, 0, sharerWindow);
-			sharers = globalSharers[classidx];
-			globalSharers[classidx] |= id;
-			MPI_Win_unlock(workrank, sharerWindow);
+			{
+				auto op = [&](std::size_t win_index) {
+					sharers = globalSharers[classidx];
+					globalSharers[classidx] |= id;
+				};
+				sharer_op(MPI_LOCK_EXCLUSIVE, workrank, classidx, op);
+			}
 			if(sharers != 0 && sharers != id && isPowerOf2(sharers)){
 				unsigned long ownid = sharers&invid;
 				unsigned long owner = workrank;
@@ -322,9 +326,11 @@ void handler(int sig, siginfo_t *si, void *context){
 				}
 				else{
 					/* update remote private holder to shared */
-					MPI_Win_lock(MPI_LOCK_EXCLUSIVE, owner, 0, sharerWindow);
-					MPI_Accumulate(&id, 1, MPI_LONG, owner, classidx,1,MPI_LONG,MPI_BOR,sharerWindow);
-					MPI_Win_unlock(owner, sharerWindow);
+					{
+						auto op = [&](std::size_t win_index){
+							MPI_Accumulate(&id, 1, MPI_LONG, owner, win_offset,1,MPI_LONG,MPI_BOR,sharer_windows[win_index]); };
+						sharer_op(MPI_LOCK_EXCLUSIVE, owner, classidx, op);
+					}
 				}
 			}
 			/* set page to permit reads and map it to the page cache */
@@ -341,11 +347,15 @@ void handler(int sig, siginfo_t *si, void *context){
 			}
 
 			/* get current sharers/writers and then add your own id */
-			MPI_Win_lock(MPI_LOCK_EXCLUSIVE, workrank, 0, sharerWindow);
-			unsigned long sharers = globalSharers[classidx];
-			unsigned long writers = globalSharers[classidx+1];
-			globalSharers[classidx+1] |= id;
-			MPI_Win_unlock(workrank, sharerWindow);
+			unsigned long sharers, writers;
+			{
+				auto op = [&](std::size_t win_index){
+					sharers = globalSharers[classidx];
+					writers = globalSharers[classidx+1];
+					globalSharers[classidx+1] |= id;
+				};
+				sharer_op(MPI_LOCK_EXCLUSIVE, workrank, classidx, op);
+			}
 
 			/* remote single writer */
 			if(writers != id && writers != 0 && isPowerOf2(writers&invid)){
@@ -356,28 +366,33 @@ void handler(int sig, siginfo_t *si, void *context){
 						break;
 					}
 				}
-				MPI_Win_lock(MPI_LOCK_EXCLUSIVE, owner, 0, sharerWindow);
-				MPI_Accumulate(&id, 1, MPI_LONG, owner, classidx+1,1,MPI_LONG,MPI_BOR,sharerWindow);
-				MPI_Win_unlock(owner, sharerWindow);
+				{
+					auto op = [&](std::size_t win_index){
+						MPI_Accumulate(&id, 1, MPI_LONG, owner, win_offset+1,1,MPI_LONG,MPI_BOR,sharer_windows[win_index]);
+					};
+					sharer_op(MPI_LOCK_EXCLUSIVE, owner, classidx, op);
+				}
 			}
 			else if(writers == id || writers == 0){
 				int n;
 				for(n=0; n<numtasks; n++){
 					if(n != workrank && ((static_cast<unsigned long>(1)<<n)&sharers) != 0){
-						MPI_Win_lock(MPI_LOCK_EXCLUSIVE, n, 0, sharerWindow);
-						MPI_Accumulate(&id, 1, MPI_LONG, n, classidx+1,1,MPI_LONG,MPI_BOR,sharerWindow);
-						MPI_Win_unlock(n, sharerWindow);
+						{
+							auto op = [&](std::size_t win_index){
+								MPI_Accumulate(&id, 1, MPI_LONG, n, win_offset+1,1,MPI_LONG,MPI_BOR,sharer_windows[win_index]);
+							};
+							sharer_op(MPI_LOCK_EXCLUSIVE, n, classidx, op);
+						}
 					}
 				}
 			}
+
 			/* set page to permit read/write and map it to the page cache */
 			vm::map_memory(aligned_access_ptr, pagesize*CACHELINE, cacheoffset+offset, PROT_READ|PROT_WRITE);
 
 		}
-		//pthread_mutex_unlock(&cachemutex);
 		/* Unlock shared sync lock and cache index lock */
 		cache_locks[startIndex].unlock();
-		//sync_mutex.unlock_shared();
 		pthread_rwlock_unlock(&sync_lock);
 		return;
 	}
@@ -411,9 +426,7 @@ void handler(int sig, siginfo_t *si, void *context){
 	line *= CACHELINE;
 
 	if(cacheControl[line].dirty == DIRTY){
-		//pthread_mutex_unlock(&cachemutex);
 		cache_locks[startIndex].unlock();
-		//sync_mutex.unlock_shared();
 		pthread_rwlock_unlock(&sync_lock);
 		return;
 	}
@@ -421,28 +434,43 @@ void handler(int sig, siginfo_t *si, void *context){
 	touchedcache[line] = 1;
 	cacheControl[line].dirty = DIRTY;
 
-	MPI_Win_lock(MPI_LOCK_SHARED, workrank, 0, sharerWindow);
-	unsigned long writers = globalSharers[classidx+1];
-	unsigned long sharers = globalSharers[classidx];
-	MPI_Win_unlock(workrank, sharerWindow);
+	unsigned long writers, sharers;
+	{
+		auto op = [&](std::size_t win_index){
+			writers = globalSharers[classidx+1];
+			sharers = globalSharers[classidx];
+		};
+		sharer_op(MPI_LOCK_SHARED, workrank, classidx, op);
+	}
+
 	/* Either already registered write - or 1 or 0 other writers already cached */
 	if(writers != id && isPowerOf2(writers)){
-		MPI_Win_lock(MPI_LOCK_EXCLUSIVE, workrank, 0, sharerWindow);
-		globalSharers[classidx+1] |= id; //register locally
-		MPI_Win_unlock(workrank, sharerWindow);
+		{
+			auto op = [&](std::size_t win_index){
+				globalSharers[classidx+1] |= id; //register locally
+			};
+			sharer_op(MPI_LOCK_EXCLUSIVE, workrank, classidx, op);
+		}
 
 		/* register and get latest sharers / writers */
-		MPI_Win_lock(MPI_LOCK_SHARED, homenode, 0, sharerWindow);
-		MPI_Get_accumulate(&id, 1,MPI_LONG,&writers,1,MPI_LONG,homenode,
-			classidx+1,1,MPI_LONG,MPI_BOR,sharerWindow);
-		MPI_Get(&sharers,1, MPI_LONG, homenode, classidx, 1,MPI_LONG,sharerWindow);
-		MPI_Win_unlock(homenode, sharerWindow);
+		{
+			auto op = [&](std::size_t win_index){
+				MPI_Get_accumulate(&id, 1,MPI_LONG,&writers,1,MPI_LONG,homenode,
+					win_offset+1,1,MPI_LONG,MPI_BOR,sharer_windows[win_index]);
+				MPI_Get(&sharers,1, MPI_LONG, homenode, win_offset, 1,MPI_LONG,sharer_windows[win_index]);
+			};
+			sharer_op(MPI_LOCK_SHARED, homenode, classidx+1, op);
+		}
+				
 		/* We get result of accumulation before operation so we need to account for that */
 		writers |= id;
 		/* Just add the (potentially) new sharers fetched to local copy */
-		MPI_Win_lock(MPI_LOCK_EXCLUSIVE, workrank, 0, sharerWindow);
-		globalSharers[classidx] |= sharers;
-		MPI_Win_unlock(workrank, sharerWindow);
+		{
+			auto op = [&](std::size_t win_index){
+				globalSharers[classidx] |= sharers;
+			};
+			sharer_op(MPI_LOCK_EXCLUSIVE, workrank, classidx, op);
+		}
 
 		/* check if we need to update */
 		if(writers != id && writers != 0 && isPowerOf2(writers&invid)){
@@ -453,17 +481,17 @@ void handler(int sig, siginfo_t *si, void *context){
 					break;
 				}
 			}
-			MPI_Win_lock(MPI_LOCK_EXCLUSIVE, owner, 0, sharerWindow);
-			MPI_Accumulate(&id, 1, MPI_LONG, owner, classidx+1,1,MPI_LONG,MPI_BOR,sharerWindow);
-			MPI_Win_unlock(owner, sharerWindow);
+			sharer_op(MPI_LOCK_EXCLUSIVE, owner, classidx+1, [&](std::size_t win_index){
+					MPI_Accumulate(&id, 1, MPI_LONG, owner, win_offset+1,1,MPI_LONG,MPI_BOR,sharer_windows[win_index]);
+					});
 		}
 		else if(writers==id || writers==0){
 			int n;
 			for(n=0; n<numtasks; n++){
 				if(n != workrank && ((static_cast<unsigned long>(1)<<n)&sharers) != 0){
-					MPI_Win_lock(MPI_LOCK_EXCLUSIVE, n, 0, sharerWindow);
-					MPI_Accumulate(&id, 1, MPI_LONG, n, classidx+1,1,MPI_LONG,MPI_BOR,sharerWindow);
-					MPI_Win_unlock(n, sharerWindow);
+					sharer_op(MPI_LOCK_EXCLUSIVE, n, classidx+1, [&](std::size_t win_index){
+							MPI_Accumulate(&id, 1, MPI_LONG, n, win_offset+1,1,MPI_LONG,MPI_BOR,sharer_windows[win_index]);
+							});
 				}
 			}
 		}
@@ -472,9 +500,7 @@ void handler(int sig, siginfo_t *si, void *context){
 	memcpy(copy,aligned_access_ptr,CACHELINE*pagesize);
 	argo_write_buffer->add(startIndex);
 	mprotect(aligned_access_ptr, pagesize*CACHELINE,PROT_WRITE|PROT_READ);
-	//pthread_mutex_unlock(&cachemutex);
 	cache_locks[startIndex].unlock();
-	//sync_mutex.unlock_shared();
 	pthread_rwlock_unlock(&sync_lock);
 	double t2 = MPI_Wtime();
 	stats.storetime += t2-t1;
@@ -529,6 +555,8 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 	std::size_t end_index = start_index+CACHELINE;
 	const argo::node_id_t load_node = get_homenode(aligned_access_offset);
 	const std::size_t load_offset = get_offset(aligned_access_offset);
+	const std::size_t load_win_index = get_window_index(
+			get_classification_index(aligned_access_offset));
 
 
 	/* Return if requested cache entry is already up to date. */
@@ -547,7 +575,11 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 		if(temp_addr < size_of_all && i < cachesize){
 			const argo::node_id_t temp_node = peek_homenode(temp_addr);
 			const std::size_t temp_offset = peek_offset(temp_addr);
-			if(temp_node == load_node && temp_offset == (load_offset + p*block_size)){
+			const std::size_t temp_win_index = get_window_index(
+					get_classification_index(temp_addr));
+			if(temp_node == load_node &&
+					temp_offset == (load_offset + p*block_size) &&
+					temp_win_index == load_win_index){
 				end_index+=CACHELINE;
 			}else{
 				break;
@@ -637,43 +669,48 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 	stats.loads++;
 
 	/* Get globalSharers info from local node and add self to it */
-	MPI_Win_lock(MPI_LOCK_SHARED, workrank, 0, sharerWindow);
-	for(std::size_t i = 0; i < fetch_size; i+=CACHELINE){
-		if(pages_to_load[i]){
-			/* Check local pyxis directory if we are sharer of the page */
-			local_sharers[i] = (globalSharers[classification_index_array[i]])&node_id_bit;
-			if(local_sharers[i] == 0){
-				sharer_bit_mask[i*2] = node_id_bit;
-				new_sharer = true; //At least one new sharer detected
+	sharer_op(MPI_LOCK_SHARED, workrank, classification_index_array[0],
+			[&](std::size_t win_index){
+		for(std::size_t i = 0; i < fetch_size; i+=CACHELINE){
+			if(pages_to_load[i]){
+				/* Check local pyxis directory if we are sharer of the page */
+				local_sharers[i] = (globalSharers[classification_index_array[i]])&node_id_bit;
+				if(local_sharers[i] == 0){
+					sharer_bit_mask[i*2] = node_id_bit;
+					new_sharer = true; //At least one new sharer detected
+				}
 			}
 		}
-	}
-	MPI_Win_unlock(workrank, sharerWindow);
+	});
 
+	std::size_t win_offset = get_window_offset(classification_index_array[0]);
 	/* If this node is a new sharer of at least one of the pages */
 	if(new_sharer){
 		/* Register this node as sharer of all newly shared pages in the load_node's
 		 * globalSharers directory using one MPI call. When this call returns,
 		 * remote_sharers contains remote globalSharers directory values prior to
 		 * this call. */
-		MPI_Win_lock(MPI_LOCK_SHARED, load_node, 0, sharerWindow);
-		MPI_Get_accumulate(sharer_bit_mask.data(), classification_size, MPI_LONG,
-				remote_sharers.data(), classification_size, MPI_LONG,
-				load_node, classification_index_array[0], classification_size,
-				MPI_LONG, MPI_BOR, sharerWindow);
-		MPI_Win_unlock(load_node, sharerWindow);
+		sharer_op(MPI_LOCK_SHARED, load_node, classification_index_array[0],
+				[&](std::size_t win_index){
+				MPI_Get_accumulate(sharer_bit_mask.data(), classification_size, MPI_LONG,
+						remote_sharers.data(), classification_size, MPI_LONG,
+						load_node, win_offset, classification_size,
+						MPI_LONG, MPI_BOR, sharer_windows[win_index]);
+				});
+		//TODO: Offsets need to be relative to window start/end
 	}
 
 	/* Register the received remote globalSharers information locally */
-	MPI_Win_lock(MPI_LOCK_EXCLUSIVE, workrank, 0, sharerWindow);
-	for(std::size_t i = 0; i < fetch_size; i+=CACHELINE){
-		if(pages_to_load[i]){
-			globalSharers[classification_index_array[i]] |= remote_sharers[i*2];
-			globalSharers[classification_index_array[i]] |= node_id_bit; //Also add self
-			globalSharers[classification_index_array[i]+1] |= remote_sharers[(i*2)+1];
+	sharer_op(MPI_LOCK_EXCLUSIVE, workrank, classification_index_array[0],
+			[&](std::size_t win_index){
+		for(std::size_t i = 0; i < fetch_size; i+=CACHELINE){
+			if(pages_to_load[i]){
+						globalSharers[classification_index_array[i]] |= remote_sharers[i*2];
+						globalSharers[classification_index_array[i]] |= node_id_bit; //Also add self
+						globalSharers[classification_index_array[i]+1] |= remote_sharers[(i*2)+1];
+			}
 		}
-	}
-	MPI_Win_unlock(workrank, sharerWindow);
+	});
 
 	/* If any owner of a page we loaded needs to downgrade from private
 	 * to shared, we need to notify it */
@@ -707,11 +744,13 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 				}
 
 				/* Downgrade all relevant pages on the owner node from private to shared */
-				MPI_Win_lock(MPI_LOCK_EXCLUSIVE, owner, 0, sharerWindow);
-				MPI_Accumulate(sharer_bit_mask.data(), classification_size, MPI_LONG, owner,
-						classification_index_array[0], classification_size, MPI_LONG,
-						MPI_BOR, sharerWindow);
-				MPI_Win_unlock(owner, sharerWindow);
+				sharer_op(MPI_LOCK_EXCLUSIVE, owner, classification_index_array[0],
+						[&](std::size_t win_index){
+						MPI_Accumulate(sharer_bit_mask.data(), classification_size, MPI_LONG, owner,
+								win_offset, classification_size, MPI_LONG,
+								MPI_BOR, sharer_windows[win_index]);
+					});
+				//TODO: This should probably be in one window
 			}
 		}
 	}
@@ -865,7 +904,7 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 	cachesize /= pagesize;
 	cache_locks.resize(cachesize);
 
-	win_granularity = env::mpi_win_granularity;
+	win_granularity = env::mpi_win_granularity();
 
 
 	classificationSize = 2*(argo_size/pagesize);
@@ -977,8 +1016,15 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 									 MPI_INFO_NULL, MPI_COMM_WORLD, &globalDataWindow[i]);
 	}
 
-	MPI_Win_create(globalSharers, gwritersize, sizeof(unsigned long),
-								 MPI_INFO_NULL, MPI_COMM_WORLD, &sharerWindow);
+	// Create one sharer_window per page
+	std::size_t num_windows = std::ceil((classificationSize/2)/static_cast<double>(win_granularity));
+	sharer_windows.resize(num_windows);
+	for(i = 0; i < num_windows; i++){
+		std::size_t sharer_offset = i*2*win_granularity;
+		MPI_Win_create(&globalSharers[sharer_offset], 2*win_granularity*sizeof(unsigned long),
+				sizeof(unsigned long), MPI_INFO_NULL, MPI_COMM_WORLD, &sharer_windows[i]);
+	}
+
 	MPI_Win_create(lockbuffer, pagesize, 1, MPI_INFO_NULL, MPI_COMM_WORLD, &lockWindow);
 
 	if (dd::is_first_touch_policy()) {
@@ -1030,7 +1076,9 @@ void argo_finalize(){
 	for(i=0; i<numtasks; i++){
 		MPI_Win_free(&globalDataWindow[i]);
 	}
-	MPI_Win_free(&sharerWindow);
+	for(auto window : sharer_windows){
+		MPI_Win_free(&window);
+	}
 	MPI_Win_free(&lockWindow);
 	if (dd::is_first_touch_policy()) {
 		MPI_Win_free(&owners_dir_window);
@@ -1060,7 +1108,8 @@ void self_invalidation(){
 				argo_write_buffer->flush();
 				flushed = 1;
 			}
-			MPI_Win_lock(MPI_LOCK_SHARED, workrank, 0, sharerWindow);
+			std::size_t win_index = get_window_index(classidx);
+			MPI_Win_lock(MPI_LOCK_SHARED, workrank, 0, sharer_windows[win_index]);
 			if(
 				 // node is single writer
 				 (globalSharers[classidx+1]==id)
@@ -1068,12 +1117,12 @@ void self_invalidation(){
 				 // No writer and assert that the node is a sharer
 				 ((globalSharers[classidx+1]==0) && ((globalSharers[classidx]&id)==id))
 				 ){
-				MPI_Win_unlock(workrank, sharerWindow);
+				MPI_Win_unlock(workrank, sharer_windows[win_index]);
 				touchedcache[i] =1;
 				/*nothing - we keep the pages, SD is done in flushWB*/
 			}
 			else{ //multiple writer or SO
-				MPI_Win_unlock(workrank, sharerWindow);
+				MPI_Win_unlock(workrank, sharer_windows[win_index]);
 				cacheControl[i].dirty=CLEAN;
 				cacheControl[i].state = INVALID;
 				touchedcache[i] =0;
@@ -1099,14 +1148,10 @@ void swdsm_argo_barrier(int n){ //BARRIER
 
 	if(pthread_mutex_trylock(&barriermutex) == 0){
 		barrierlockholder = pthread_self();
-		//pthread_mutex_lock(&cachemutex);
-		//sync_mutex.lock();
 		pthread_rwlock_wrlock(&sync_lock);
 		argo_write_buffer->flush();
 		MPI_Barrier(workcomm);
 		self_invalidation();
-		//pthread_mutex_unlock(&cachemutex);
-		//sync_mutex.unlock()
 		pthread_rwlock_unlock(&sync_lock);
 	}
 
@@ -1125,11 +1170,13 @@ void argo_reset_coherence(int n){
 	stats.stores = 0;
 	memset(touchedcache, 0, cachesize);
 
-	MPI_Win_lock(MPI_LOCK_EXCLUSIVE, workrank, 0, sharerWindow);
-	for(j = 0; j < classificationSize; j++){
-		globalSharers[j] = 0;
+	for(unsigned long i=0; i<classificationSize; i+=win_granularity){
+		sharer_op(MPI_LOCK_EXCLUSIVE, workrank, i, [&](std::size_t win_index){
+				for(j = i; j < i+win_granularity; j++){
+					globalSharers[j] = 0;
+				}
+			});
 	}
-	MPI_Win_unlock(workrank, sharerWindow);
 	
 	if (dd::is_first_touch_policy()) {
 		/**
@@ -1156,26 +1203,18 @@ void argo_reset_coherence(int n){
 
 void argo_acquire(){
 	int flag;
-	//pthread_mutex_lock(&cachemutex);
-	//sync_mutex.lock();
 	pthread_rwlock_wrlock(&sync_lock);
 	self_invalidation();
 	MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,workcomm,&flag,MPI_STATUS_IGNORE);
-	//pthread_mutex_unlock(&cachemutex);
-	//sync_mutex.unlock();
 	pthread_rwlock_unlock(&sync_lock);
 }
 
 
 void argo_release(){
 	int flag;
-	//pthread_mutex_lock(&cachemutex);
-	//sync_mutex.lock();
 	pthread_rwlock_wrlock(&sync_lock);
 	argo_write_buffer->flush();
 	MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,workcomm,&flag,MPI_STATUS_IGNORE);
-	//pthread_mutex_unlock(&cachemutex);
-	//sync_mutex.unlock();
 	pthread_rwlock_unlock(&sync_lock);
 }
 
@@ -1277,4 +1316,20 @@ bool _is_cached(std::size_t addr) {
 	// Return true for pages which are either local or already cached
 	return ((homenode == getID()) || (cacheControl[cache_index].tag == aligned_address &&
 				cacheControl[cache_index].state == VALID));
+}
+
+void sharer_op(int lock_type, int rank, int offset,
+		std::function<void(const std::size_t window_index)> op) {
+	std::size_t win_index = get_window_index(offset);
+	MPI_Win_lock(lock_type, rank, 0, sharer_windows[win_index]);
+	op(win_index);
+	MPI_Win_unlock(rank, sharer_windows[win_index]);
+}
+
+std::size_t get_window_index(int offset){
+	return (offset/2)/win_granularity;
+}
+
+std::size_t get_window_offset(int classification_index){
+	return classification_index%(win_granularity*2);
 }
