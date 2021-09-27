@@ -7,6 +7,7 @@
 #include "../backend.hpp"
 #include "swdsm.h"
 #include "write_buffer.hpp"
+#include "mpi_lock.hpp"
 #include "virtual_memory/virtual_memory.hpp"
 #include <vector>
 
@@ -37,23 +38,22 @@ extern std::vector<cache_lock> cache_locks;
  */
 extern pthread_rwlock_t sync_lock;
 /**
- * @brief barwindowsused is needed to know which globalDataWindows
- * to close.
- * @deprecated No longer needed once proper API functions are in place
- */
-extern char * barwindowsused;
-/**
- * @brief globalDataWindows need to be explicitly closed by the
+ * @brief data_windows need to be explicitly closed by the
  * caller of storepageDIFF
  * @deprecated Should eventually be handled through API functions
  */
-extern MPI_Win *globalDataWindow;
+extern std::vector<std::vector<MPI_Win>> data_windows;
 /**
  * @brief sharer_windows protects the pyxis directory
  * @deprecated Should not be needed once the pyxis directory is
  * managed from elsewhere through a cache module.
  */
 extern std::vector<MPI_Win> sharer_windows;
+/**
+ * @brief sharer locks that protect concurrent access from the same node
+ * @deprecated Should be done in a cache module
+ */
+extern mpi_lock **mpi_lock_sharer;
 /**
  * @brief Needed to update argo statistics
  * @deprecated Should be replaced by API calls to a stats module
@@ -89,7 +89,6 @@ namespace argo {
 				((reinterpret_cast<std::size_t>(addr)-start_address)/block_size)*block_size;
 			const node_id_t node_id = argo::backend::node_id();
 			const std::size_t node_id_bit = static_cast<std::size_t>(1) << node_id;
-			const std::size_t cache_index = getCacheIndex(argo_address);
 
 			// Lock relevant mutexes. Start statistics timekeeping
 			double t1 = MPI_Wtime();
@@ -124,10 +123,11 @@ namespace argo {
 					cacheControl[cache_index].dirty = CLEAN;
 				}
 
-				std::size_t win_index = get_window_index(classification_index);
+				std::size_t win_index = get_sharer_win_index(classification_index);
 				// Optimization to keep pages in cache if they do not
 				// need to be invalidated.
-				MPI_Win_lock(MPI_LOCK_SHARED, node_id, 0, sharer_windows[win_index]);
+				//MPI_Win_lock(MPI_LOCK_SHARED, node_id, 0, sharer_windows[win_index]);
+				mpi_lock_sharer[win_index][node_id].lock(MPI_LOCK_SHARED, node_id, sharer_windows[win_index]);
 				if(
 						// node is single writer
 						(globalSharers[classification_index+1] == node_id_bit)
@@ -136,12 +136,14 @@ namespace argo {
 						((globalSharers[classification_index+1] == 0) &&
 						 ((globalSharers[classification_index] & node_id_bit) == node_id_bit))
 				  ){
-					MPI_Win_unlock(node_id, sharer_windows[win_index]);
+					//MPI_Win_unlock(node_id, sharer_windows[win_index]);
+					mpi_lock_sharer[win_index][node_id].unlock(node_id, sharer_windows[win_index]);
 					touchedcache[cache_index]=1;
 					//nothing - we keep the pages, SD is done in flushWB
 				}
 				else{ //multiple writer or SO, invalidate the page
-					MPI_Win_unlock(node_id, sharer_windows[win_index]);
+					//MPI_Win_unlock(node_id, sharer_windows[win_index]);
+					mpi_lock_sharer[win_index][node_id].unlock(node_id, sharer_windows[win_index]);
 					cacheControl[cache_index].dirty=CLEAN;
 					cacheControl[cache_index].state = INVALID;
 					touchedcache[cache_index]=0;
@@ -150,12 +152,7 @@ namespace argo {
 				cache_locks[cache_index].unlock();
 			}
 			// Make sure to sync writebacks
-			for(int i = 0; i < number_of_nodes(); i++){
-				if(barwindowsused[i] == 1){
-					MPI_Win_unlock(i, globalDataWindow[i]); //Sync write backs
-					barwindowsused[i] = 0;
-				}
-			}
+			unlock_windows();
 
 			double t2 = MPI_Wtime();
 			stats.ssitime += t2-t1;
@@ -180,7 +177,6 @@ namespace argo {
 			std::size_t argo_address =
 				((reinterpret_cast<std::size_t>(addr)-start_address)/block_size)*block_size;
 			const node_id_t node_id = argo::backend::node_id();
-			const std::size_t cache_index = getCacheIndex(argo_address);
 
 			// Lock relevant mutexes. Start statistics timekeeping
 			double t1 = MPI_Wtime();
@@ -215,12 +211,7 @@ namespace argo {
 				//TODO: Does this have to be outside?
 			}
 			// Make sure to sync writebacks
-			for(int i = 0; i < number_of_nodes(); i++){
-				if(barwindowsused[i] == 1){
-					MPI_Win_unlock(i, globalDataWindow[i]); //Sync write backs
-					barwindowsused[i] = 0;
-				}
-			}
+			unlock_windows();
 
 			double t2 = MPI_Wtime();
 			stats.ssdtime += t2-t1;
