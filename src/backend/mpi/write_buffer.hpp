@@ -30,18 +30,6 @@ extern argo_statistics stats;
  */
 extern control_data* cacheControl;
 
-/**
- * @brief		MPI Window for the global ArgoDSM memory space
- * @deprecated 	Prototype implementation, this should not be accessed directly
- */
-extern MPI_Win* globalDataWindow;
-
-/**
- * @brief		Tracking of which MPI RDMA windows are open
- * @deprecated 	Prototype implementation, this should not be accessed directly
- */
-extern char* barwindowsused;
-
 /** @brief Block size based on backend definition */
 const std::size_t block_size = page_size*CACHELINE;
 
@@ -173,12 +161,7 @@ class write_buffer
 
 			// Close any windows used to write back data
 			// This should be replaced with an API call
-			for(int i = 0; i < argo::backend::number_of_nodes(); i++){
-				if(barwindowsused[i] == 1){
-					MPI_Win_unlock(i, globalDataWindow[i]);
-					barwindowsused[i] = 0;
-				}
-			}
+			unlock_windows();
 		}
 
 	public:
@@ -266,12 +249,7 @@ class write_buffer
 
 			// Close any windows used to write back data
 			// This should be replaced with an API call
-			for(int i = 0; i < argo::backend::number_of_nodes(); i++){
-				if(barwindowsused[i] == 1){
-					MPI_Win_unlock(i, globalDataWindow[i]);
-					barwindowsused[i] = 0;
-				}
-			}
+			unlock_windows();
 
 			// Update timer statistics
 			double t_stop = MPI_Wtime();
