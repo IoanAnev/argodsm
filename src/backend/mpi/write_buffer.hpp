@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <mutex>
 #include <mpi.h>
+#include <vector>
 
 #include "backend/backend.hpp"
 #include "env/env.hpp"
@@ -32,6 +33,9 @@ extern control_data* cacheControl;
 
 /** @brief Block size based on backend definition */
 const std::size_t block_size = page_size*CACHELINE;
+
+//TODO: Document
+extern std::vector<cache_lock> cache_locks;
 
 /**
  * @brief	A write buffer in FIFO style with the capability to erase any
@@ -147,6 +151,7 @@ class write_buffer
 				// The code below should be replaced with a cache API
 				// call to write back a cached page
 				std::size_t cache_index = pop();
+				cache_locks[cache_index].lock();
 				std::uintptr_t page_address = cacheControl[cache_index].tag;
 				void* page_ptr = static_cast<char*>(
 						argo::virtual_memory::start_address()) + page_address;
@@ -157,11 +162,12 @@ class write_buffer
 				for(int i=0; i < CACHELINE; i++){
 					storepageDIFF(cache_index+i,page_size*i+page_address);
 				}
+				cache_locks[cache_index].unlock();
+				// Close any windows used to write back data
+				// This should be replaced with an API call
+				// TODO: Any impact of moving this outside?
+				unlock_windows();
 			}
-
-			// Close any windows used to write back data
-			// This should be replaced with an API call
-			unlock_windows();
 		}
 
 	public:
@@ -245,11 +251,12 @@ class write_buffer
 				for(int i=0; i < CACHELINE; i++){
 					storepageDIFF(cache_index+i,page_size*i+page_address);
 				}
+				unlock_windows();
 			}
 
 			// Close any windows used to write back data
 			// This should be replaced with an API call
-			unlock_windows();
+			//unlock_windows();
 
 			// Update timer statistics
 			double t_stop = MPI_Wtime();
