@@ -13,6 +13,7 @@
 #include <mutex>
 #include <mpi.h>
 #include <vector>
+#include <thread>
 
 #include "backend/backend.hpp"
 #include "env/env.hpp"
@@ -60,6 +61,11 @@ class write_buffer
 
 		/** @brief	Mutex to protect the write buffer from simultaneous accesses */
 		mutable std::mutex _buffer_mutex;
+		mutable std::mutex _parallel_flush_mutex;
+
+		/** @brief Time keeping for the write buffer */
+		double _flush_time;
+		double _write_back_time;
 
 		/**
 		 * @brief	Check if the write buffer is empty
@@ -143,6 +149,7 @@ class write_buffer
 		 * @pre		Require write_buffer_mutex to be held
 		 */
 		void flush_partial() {
+			double t_start = MPI_Wtime();
 			// Sort the first _write_back_size elements
 			sort_first();
 
@@ -168,6 +175,48 @@ class write_buffer
 				// TODO: Any impact of moving this outside?
 				unlock_windows();
 			}
+			double t_stop = MPI_Wtime();
+			_write_back_time += t_stop-t_start;
+		}
+
+		/**
+		 * @brief	Iterates over the buffer and writes back elements in chunks
+		 * 			until there are no elements left.
+		 */
+		void process_buffer(){
+			std::size_t block_size = argo::env::mpi_win_granularity();
+
+			// Continue until the buffer is empty
+			while(!empty()) {
+				std::vector<std::size_t> cache_indices;
+				{
+					// Under protected access, get block_size number of indices
+					std::lock_guard<std::mutex> pop_lock(_parallel_flush_mutex);
+					for(int i=0; i<block_size; i++){
+						if(!empty()){
+							cache_indices.push_back(pop());
+						}else{
+							break;
+						}
+					}
+				}
+
+				// For each index, handle the corresponding ArgoDSM page
+				for(auto cache_index : cache_indices) {
+					std::uintptr_t page_address = cacheControl[cache_index].tag;
+					void* page_ptr = static_cast<char*>(
+							argo::virtual_memory::start_address()) + page_address;
+
+					// Write back the page and clean up cache
+					mprotect(page_ptr, block_size, PROT_READ);
+					cacheControl[cache_index].dirty=CLEAN;
+					for(int i=0; i < CACHELINE; i++){
+						storepageDIFF(cache_index+i,page_size*i+page_address);
+					}
+					// The windows must be unlocked for concurrency
+					unlock_windows();
+				}
+			}
 		}
 
 	public:
@@ -176,7 +225,9 @@ class write_buffer
 		 */
 		write_buffer()	:
 			_max_size(argo::env::write_buffer_size()/CACHELINE),
-			_write_back_size(argo::env::write_buffer_write_back_size()/CACHELINE) { }
+			_write_back_size(argo::env::write_buffer_write_back_size()/CACHELINE),
+			_flush_time(0),
+			_write_back_time(0) { }
 
 		/**
 		 * @brief	Copy constructor
@@ -189,6 +240,8 @@ class write_buffer
 			_buffer = other._buffer;
 			_max_size = other._max_size;
 			_write_back_size = other._write_back_size;
+			_flush_time = other._flush_time;
+			_write_back_time = other._write_back_time;
 		}
 
 		/**
@@ -206,6 +259,8 @@ class write_buffer
 				_buffer = other._buffer;
 				_max_size = other._max_size;
 				_write_back_size = other._write_back_size;
+				_flush_time = other,_flush_time;
+				_write_back_time = other,_write_back_time;
 			}
 			return *this;
 		}
@@ -231,36 +286,33 @@ class write_buffer
 			double t_start = MPI_Wtime();
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 
-			// Sort the write buffer if needed
-			if(!empty()) {
-				sort();
+			// If it's empty we don't need to do anything
+			if(empty()){
+				double t_stop = MPI_Wtime();
+				_flush_time += t_stop-t_start;
+				return;
 			}
+			// Otherwise, sort the buffer
+			sort();
 
-			// For each element, handle the corresponding ArgoDSM page
-			while(!empty()) {
-				// The code below should be replaced with a cache API
-				// call to write back a cached page
-				std::size_t cache_index = pop();
-				std::uintptr_t page_address = cacheControl[cache_index].tag;
-				void* page_ptr = static_cast<char*>(
-						argo::virtual_memory::start_address()) + page_address;
-
-				// Write back the page
-				mprotect(page_ptr, block_size, PROT_READ);
-				cacheControl[cache_index].dirty=CLEAN;
-				for(int i=0; i < CACHELINE; i++){
-					storepageDIFF(cache_index+i,page_size*i+page_address);
+			// Start an appropriate amount of workers
+			std::size_t hwthreads = std::thread::hardware_concurrency();
+			std::size_t nthreads = hwthreads > 1 ? hwthreads/2 : 1;
+			//TODO: This needs to be configurable for SWnodes
+			std::vector<std::thread> threads;
+			for(int n=0; n<nthreads; n++){
+				threads.emplace_back(&write_buffer::process_buffer, this);
+			}
+			// Wait for them all to finish
+			for(auto& t : threads) {
+				if (t.joinable()) {
+					t.join();
 				}
-				unlock_windows();
 			}
-
-			// Close any windows used to write back data
-			// This should be replaced with an API call
-			//unlock_windows();
 
 			// Update timer statistics
 			double t_stop = MPI_Wtime();
-			stats.flushtime = t_stop-t_start;
+			_flush_time += t_stop-t_start;
 		}
 
 		/**
@@ -277,17 +329,31 @@ class write_buffer
 
 			// If the buffer is full, write back _write_back_size indices
 			if(size() >= _max_size){
-				double t_start = MPI_Wtime();
 				flush_partial();
-				double t_end = MPI_Wtime();
-				stats.writebacks+=CACHELINE;
-				stats.writebacktime+=t_end-t_start;
+				stats.writebacks+=CACHELINE*_write_back_size;
 			}
 
 			// Add val to the back of the buffer
 			emplace_back(val);
 		}
 
+		/**
+		 * @brief	Get the time spent flushing the write buffer
+		 * @return	The time in seconds
+		 */
+		double get_flush_time() {
+			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			return _flush_time;
+		}
+
+		/**
+		 * @brief	Get the time spent partially flushing the write buffer
+		 * @return	The time in seconds
+		 */
+		double get_write_back_time() {
+			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			return _write_back_time;
+		}
 }; //class
 
 #endif /* argo_write_buffer_hpp */
