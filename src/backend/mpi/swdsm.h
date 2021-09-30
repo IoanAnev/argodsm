@@ -154,6 +154,15 @@ class alignas(64) cache_lock {
 		void unlock(){
 			c_mutex.unlock();
 		}
+
+		/**
+		 * @brief	Get the time spent waiting for the lock
+		 * @return	The time in seconds
+		 */
+		double get_lock_time(){
+			return wait_time;
+		}
+
 };
 
 /*constants for control values*/
@@ -263,7 +272,7 @@ double argo_wtime();
 /**
  * @brief Prints collected statistics
  */
-void printStatistics();
+void print_statistics();
 
 /**
  * @brief Resets current coherence. Collective function called by all threads on all nodes.

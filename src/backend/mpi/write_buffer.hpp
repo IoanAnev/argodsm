@@ -66,6 +66,7 @@ class write_buffer
 		/** @brief Time keeping for the write buffer */
 		double _flush_time;
 		double _write_back_time;
+		double _buffer_lock_time;
 
 		/**
 		 * @brief	Check if the write buffer is empty
@@ -227,7 +228,8 @@ class write_buffer
 			_max_size(argo::env::write_buffer_size()/CACHELINE),
 			_write_back_size(argo::env::write_buffer_write_back_size()/CACHELINE),
 			_flush_time(0),
-			_write_back_time(0) { }
+			_write_back_time(0),
+			_buffer_lock_time(0) { }
 
 		/**
 		 * @brief	Copy constructor
@@ -242,6 +244,7 @@ class write_buffer
 			_write_back_size = other._write_back_size;
 			_flush_time = other._flush_time;
 			_write_back_time = other._write_back_time;
+			_buffer_lock_time = other._buffer_lock_time;
 		}
 
 		/**
@@ -261,6 +264,7 @@ class write_buffer
 				_write_back_size = other._write_back_size;
 				_flush_time = other,_flush_time;
 				_write_back_time = other,_write_back_time;
+				_buffer_lock_time = other._buffer_lock_time;
 			}
 			return *this;
 		}
@@ -270,7 +274,9 @@ class write_buffer
 		 * @param	val The value of type T to erase
 		 */
 		void erase(T val) {
+			double t_start = MPI_Wtime();
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			_buffer_lock_time += MPI_Wtime() - t_start;
 
 			typename std::deque<T>::iterator it = std::find(_buffer.begin(),
 					_buffer.end(), val);
@@ -285,6 +291,7 @@ class write_buffer
 		void flush() {
 			double t_start = MPI_Wtime();
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			_buffer_lock_time += MPI_Wtime() - t_start;
 
 			// If it's empty we don't need to do anything
 			if(empty()){
@@ -320,7 +327,9 @@ class write_buffer
 		 * @param	val The value of type T to add to the buffer
 		 */
 		void add(T val) {
+			double t_start = MPI_Wtime();
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			_buffer_lock_time += MPI_Wtime() - t_start;
 
 			// If already present in the buffer, do nothing
 			if(has(val)){
@@ -353,6 +362,15 @@ class write_buffer
 		double get_write_back_time() {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _write_back_time;
+		}
+
+		/**
+		 * @brief	Get the time spent waiting for the write buffer lock
+		 * @return	The time in seconds
+		 */
+		double get_buffer_lock_time() {
+			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			return _buffer_lock_time;
 		}
 }; //class
 
