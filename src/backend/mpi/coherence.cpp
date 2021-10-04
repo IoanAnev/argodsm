@@ -147,9 +147,9 @@ namespace argo {
 					mprotect((char*)start_address + page_address, block_size, PROT_NONE);
 				}
 				cache_locks[cache_index].unlock();
+				// Make sure to sync writebacks
+				unlock_windows();
 			}
-			// Make sure to sync writebacks
-			unlock_windows();
 
 			double t2 = MPI_Wtime();
 			stats.ssitime += t2-t1;
@@ -205,10 +205,9 @@ namespace argo {
 					cacheControl[cache_index].dirty = CLEAN;
 				}
 				cache_locks[cache_index].unlock();
-				//TODO: Does this have to be outside?
+				// Make sure to sync writebacks
+				unlock_windows();
 			}
-			// Make sure to sync writebacks
-			unlock_windows();
 
 			double t2 = MPI_Wtime();
 			stats.ssdtime += t2-t1;
