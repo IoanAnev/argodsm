@@ -414,13 +414,13 @@ unsigned long get_classification_index(uint64_t addr);
 bool _is_cached(std::size_t addr);
 
 /**
- * @brief TODO
+ * @brief TODO document this
  */
 void sharer_op(int lock_type, int rank, int offset,
 		std::function<void(const std::size_t window_index)> op);
 
 /**
- * @brief TODO
+ * @brief TODO document all these
  */
 std::size_t get_sharer_win_index(int classification_index);
 std::size_t get_sharer_win_offset(int classification_index);

@@ -776,13 +776,10 @@ void load_cache_entry(std::size_t aligned_access_offset) {
 	/* Finally, get the cache data and store it temporarily */
 	std::size_t win_index = get_data_win_index(load_offset);
 	std::size_t win_offset = get_data_win_offset(load_offset);
-	//printf("[%d] Fetching %zu pages from data_windows[%zu][%d].\n",
-	//		getID(), fetch_size, win_index, load_node);
 	mpi_lock_data[win_index][load_node].lock(MPI_LOCK_SHARED, load_node, data_windows[win_index][load_node]);
 	MPI_Get(temp_data.data(), fetch_size, cacheblock,
 					load_node, win_offset, fetch_size, cacheblock, data_windows[win_index][load_node]);
 	mpi_lock_data[win_index][load_node].unlock(load_node, data_windows[win_index][load_node]);
-	//printf("[%d] Pages fetched.\n", getID());
 
 	/* Update the cache */
 	for(std::size_t idx = start_index, p = 0; idx < end_index; idx+=CACHELINE, p+=CACHELINE){
@@ -898,8 +895,6 @@ std::size_t align_forwards(std::size_t offset, std::size_t size){
 }
 
 void argo_initialize(std::size_t argo_size, std::size_t cache_size){
-	int i;
-	unsigned long j;
 	initmpi();
 
 	/** Standardise the ArgoDSM memory space */
@@ -912,7 +907,7 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 #endif
 
 	threadbarrier = (pthread_barrier_t *) malloc(sizeof(pthread_barrier_t)*(NUM_THREADS+1));
-	for(i = 1; i <= NUM_THREADS; i++){
+	for(int i = 1; i <= NUM_THREADS; i++){
 		pthread_barrier_init(&threadbarrier[i],NULL,i);
 	}
 
@@ -937,7 +932,7 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 	int *procranks = (int *) malloc(sizeof(int)*2);
 	int workindex = 0;
 
-	for(i = 0; i < numtasks; i++){
+	for(int i = 0; i < numtasks; i++){
 		workranks[workindex++] = i;
 		procranks[0]=i;
 		procranks[1]=i+1;
@@ -1031,34 +1026,34 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 	// Create one data_window per page chunk
 	// TODO: Do we need the double dimensions or can each window be reused for another node?
 	data_windows.resize(num_data_windows, std::vector<MPI_Win>(numtasks));
-	for(i = 0; i < num_data_windows; i++){
+	for(std::size_t i = 0; i < num_data_windows; i++){
 		std::size_t data_offset = i*pagesize*win_granularity;
-		for(int k = 0; k < numtasks; k++){
+		for(int j = 0; j < numtasks; j++){
 			MPI_Win_create(&globalData[data_offset], pagesize*win_granularity*sizeof(argo_byte),
-					1, MPI_INFO_NULL, MPI_COMM_WORLD, &data_windows[i][k]);
+					1, MPI_INFO_NULL, MPI_COMM_WORLD, &data_windows[i][j]);
 		}
 	}
 	// Locks to protect the globalData windows from concurrent local access
 	mpi_lock_data = new mpi_lock*[num_data_windows];
-	for(i = 0; i < num_data_windows; i++){
+	for(std::size_t i = 0; i < num_data_windows; i++){
 		mpi_lock_data[i] = new mpi_lock[numtasks];
 	}
 
 	// Create one sharer_window per page chunk
 	num_sharer_windows = std::ceil((classificationSize/2)/static_cast<double>(win_granularity));
 	sharer_windows.resize(num_sharer_windows, std::vector<MPI_Win>(numtasks));
-	for(i = 0; i < num_sharer_windows; i++){
+	for(std::size_t i = 0; i < num_sharer_windows; i++){
 		std::size_t sharer_offset = i*2*win_granularity;
-		for(int k = 0; k < numtasks; k++){
+		for(int j = 0; j < numtasks; j++){
 			MPI_Win_create(&globalSharers[sharer_offset],
 					2*win_granularity*sizeof(unsigned long),
 					sizeof(unsigned long), MPI_INFO_NULL,
-					MPI_COMM_WORLD, &sharer_windows[i][k]);
+					MPI_COMM_WORLD, &sharer_windows[i][j]);
 		}
 	}
 	// Locks to protect the sharer windows from concurrent local access
 	mpi_lock_sharer = new mpi_lock*[num_sharer_windows];
-	for(i = 0; i < num_sharer_windows; i++){
+	for(std::size_t i = 0; i < num_sharer_windows; i++){
 		mpi_lock_sharer[i] = new mpi_lock[numtasks];
 	}
 
@@ -1085,7 +1080,7 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 		memset(global_offsets_tbl, 0, offsets_tbl_size_bytes);
 	}
 
-	for(j=0; j<cachesize; j++){
+	for(unsigned long j=0; j<cachesize; j++){
 		cacheControl[j].tag = GLOBAL_NULL;
 		cacheControl[j].state = INVALID;
 		cacheControl[j].dirty = CLEAN;
@@ -1095,7 +1090,6 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 }
 
 void argo_finalize(){
-	int i;
 	swdsm_argo_barrier(1);
 	if(getID() == 0){
 		printf("ArgoDSM shutting down\n");
@@ -1354,7 +1348,7 @@ void print_statistics(){
 	double data_total_hold_time(0), data_avg_hold_time(0), data_max_hold_time(0);
 	int data_num_locks(0);
 
-	for(int i=0; i<num_data_windows; i++){
+	for(std::size_t i=0; i<num_data_windows; i++){
 		for(int j=0; j<numtasks; j++){
 			data_total_lock_time += mpi_lock_data[i][j].get_locktime();
 			data_total_unlock_time += mpi_lock_data[i][j].get_unlocktime();
@@ -1388,7 +1382,7 @@ void print_statistics(){
 	double sharer_total_hold_time(0), sharer_avg_hold_time(0), sharer_max_hold_time(0);
 	int sharer_num_locks(0);
 
-	for(int i=0; i<num_sharer_windows; i++){
+	for(std::size_t i=0; i<num_sharer_windows; i++){
 		for(int j=0; j<numtasks; j++){
 			sharer_total_lock_time += mpi_lock_sharer[i][j].get_locktime();
 			sharer_total_unlock_time += mpi_lock_sharer[i][j].get_unlocktime();
