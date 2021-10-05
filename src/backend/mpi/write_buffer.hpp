@@ -193,7 +193,7 @@ class write_buffer
 				{
 					// Under protected access, get block_size number of indices
 					std::lock_guard<std::mutex> pop_lock(_parallel_flush_mutex);
-					for(int i=0; i<block_size; i++){
+					for(std::size_t i=0; i<block_size; i++){
 						if(!empty()){
 							cache_indices.push_back(pop());
 						}else{
@@ -307,7 +307,7 @@ class write_buffer
 			std::size_t nthreads = hwthreads > 1 ? hwthreads/2 : 1;
 			//TODO: This needs to be configurable for SWnodes
 			std::vector<std::thread> threads;
-			for(int n=0; n<nthreads; n++){
+			for(std::size_t n=0; n<nthreads; n++){
 				threads.emplace_back(&write_buffer::process_buffer, this);
 			}
 			// Wait for them all to finish
