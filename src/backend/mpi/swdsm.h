@@ -424,8 +424,8 @@ void sharer_op(int lock_type, int rank, int offset,
  */
 std::size_t get_sharer_win_index(int classification_index);
 std::size_t get_sharer_win_offset(int classification_index);
-std::size_t get_data_win_index(int offset);
-std::size_t get_data_win_offset(int offset);
+std::size_t get_data_win_index(std::size_t offset);
+std::size_t get_data_win_offset(std::size_t offset);
 bool have_lock(int data_win_index, int homenode);
 void add_to_locked(int data_win_index, int homenode);
 void unlock_windows();
