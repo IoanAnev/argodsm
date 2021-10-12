@@ -433,4 +433,12 @@ std::size_t get_data_win_offset(std::size_t offset);
 bool have_lock(int data_win_index, int homenode);
 void add_to_locked(int data_win_index, int homenode);
 void unlock_windows();
+
+/**
+ * @brief Returns the write buffer (by index) which the
+ * cache index should be added to or removed from
+ * @param cache_index a valid ArgoDSM cache index
+ * @return The write buffer by index
+ */
+std::size_t get_write_buffer(std::size_t cache_index);
 #endif /* argo_swdsm_h */

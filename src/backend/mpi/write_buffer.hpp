@@ -21,12 +21,6 @@
 #include "swdsm.h"
 
 /**
- * @brief		Argo statistics struct
- * @deprecated 	This should be replaced with an API call
- */
-extern argo_statistics stats;
-
-/**
  * @brief		Argo cache data structure
  * @deprecated 	prototype implementation, should be replaced with API calls
  */
@@ -234,6 +228,7 @@ class write_buffer
 		/**
 		 * @brief	Copy constructor
 		 * @param	other The write_buffer object to copy from
+		 * @note	with c++14 we could use std::shared_lock for lock_other
 		 */
 		write_buffer(const write_buffer & other) {
 			// Ensure protection of data
@@ -251,6 +246,7 @@ class write_buffer
 		 * @brief	Copy assignment operator
 		 * @param	other the write_buffer object to copy assign from
 		 * @return	reference to the created copy
+		 * @note	with c++14 we could use std::shared_lock for lock_other
 		 */
 		write_buffer& operator=(const write_buffer & other) {
 			if(&other != this) {
@@ -262,12 +258,52 @@ class write_buffer
 				_buffer = other._buffer;
 				_max_size = other._max_size;
 				_write_back_size = other._write_back_size;
-				_flush_time = other,_flush_time;
-				_write_back_time = other,_write_back_time;
+				_flush_time = other._flush_time;
+				_write_back_time = other._write_back_time;
 				_buffer_lock_time = other._buffer_lock_time;
 			}
 			return *this;
 		}
+
+		/**
+		 * @brief	Move constructor
+		 * @param	other the write_buffer object to move from
+		 */
+		write_buffer(write_buffer && other) {
+			// Ensure protection of data
+			std::lock_guard<std::mutex> lock_other(other._buffer_mutex);
+
+			// Copy data
+			_buffer = std::move(other._buffer);
+			_max_size = std::move(other._max_size);
+			_write_back_size = std::move(other._write_back_size);
+			_flush_time = std::move(other._flush_time);
+			_write_back_time = std::move(other._write_back_time);
+			_buffer_lock_time = std::move(other._buffer_lock_time);
+		}
+
+		/**
+		 * @brief	Move assignment operator
+		 * @param	other the write_buffer object to move assign from
+		 * @return	reference to the moved object
+		 */
+		write_buffer& operator=(write_buffer && other) {
+			if (&other != this) {
+				// Ensure protection of data
+				std::unique_lock<std::mutex> lock_this(_buffer_mutex, std::defer_lock);
+				std::unique_lock<std::mutex> lock_other(other._buffer_mutex, std::defer_lock);
+				std::lock(lock_this, lock_other);
+
+				_buffer = std::move(other._buffer);
+				_max_size = std::move(other._max_size);
+				_write_back_size = std::move(other._write_back_size);
+				_flush_time = std::move(other._flush_time);
+				_write_back_time = std::move(other._write_back_time);
+				_buffer_lock_time = std::move(other._buffer_lock_time);
+			}
+			return *this;
+		}
+
 
 		/**
 		 * @brief	If val exists in buffer, delete it. Else, do nothing.
@@ -339,7 +375,6 @@ class write_buffer
 			// If the buffer is full, write back _write_back_size indices
 			if(size() >= _max_size){
 				flush_partial();
-				stats.writebacks+=CACHELINE*_write_back_size;
 			}
 
 			// Add val to the back of the buffer
@@ -372,6 +407,15 @@ class write_buffer
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _buffer_lock_time;
 		}
+
+		/**
+		 * @brief get buffer size
+		 */
+		std::size_t get_size() {
+			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			return _buffer.size();
+		}
+
 }; //class
 
 #endif /* argo_write_buffer_hpp */

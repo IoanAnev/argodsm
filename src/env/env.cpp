@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <thread>
 
 #include "env.hpp"
 
@@ -26,6 +27,12 @@ namespace {
 	 * @see @ref ARGO_CACHE_SIZE
 	 */
 	const std::size_t default_cache_size = 1ul<<30; // default: 1GB
+
+	/**
+	 * @brief default requested write buffer count (if environment variable is unset)
+	 * @see @ref ARGO_WRITE_BUFFER_COUNT
+	 */
+	const std::size_t default_write_buffer_count = 8; // default: 8 buffers
 
 	/**
 	 * @brief default requested write buffer size (if environment variable is unset)
@@ -74,6 +81,12 @@ namespace {
 	 * @see @ref ARGO_CACHE_SIZE
 	 */
 	const std::string env_cache_size = "ARGO_CACHE_SIZE";
+
+	/**
+	 * @brief environment variable used for requesting write buffer count
+	 * @see @ref ARGO_WRITE_BUFFER_COUNT
+	 */
+	const std::string env_write_buffer_count = "ARGO_WRITE_BUFFER_COUNT";
 
 	/**
 	 * @brief environment variable used for requesting write buffer size
@@ -128,6 +141,11 @@ namespace {
 	 * @brief cache size requested through the environment variable @ref ARGO_CACHE_SIZE
 	 */
 	std::size_t value_cache_size;
+
+	/**
+	 * @brief write buffer count requested through the environment variable @ref ARGO_WRITE_BUFFER_COUNT
+	 */
+	std::size_t value_write_buffer_count;
 
 	/**
 	 * @brief write buffer size requested through the environment variable @ref ARGO_WRITE_BUFFER_SIZE
@@ -208,6 +226,20 @@ namespace argo {
 		void init() {
 			value_memory_size = parse_env<std::size_t>(env_memory_size, default_memory_size).second;
 			value_cache_size = parse_env<std::size_t>(env_cache_size, default_cache_size).second;
+
+			// Write buffer environment
+			std::size_t hw_threads = std::thread::hardware_concurrency();
+			if(hw_threads>1){
+				// If we can access hardware thread info, use this
+				value_write_buffer_count = parse_env<std::size_t>(
+						env_write_buffer_count,
+						hw_threads).second;
+			}else{
+				// Else, we default to hardcoded value
+				value_write_buffer_count = parse_env<std::size_t>(
+						env_write_buffer_count,
+						default_write_buffer_count).second;
+			}
 			value_write_buffer_size = parse_env<std::size_t>(
 					env_write_buffer_size,
 					default_write_buffer_size).second;
@@ -236,6 +268,11 @@ namespace argo {
 		std::size_t cache_size() {
 			assert_initialized();
 			return value_cache_size;
+		}
+
+		std::size_t write_buffer_count() {
+			assert_initialized();
+			return value_write_buffer_count;
 		}
 
 		std::size_t write_buffer_size() {

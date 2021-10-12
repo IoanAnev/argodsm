@@ -22,6 +22,11 @@
  *          cache_size parameter (or it has value 0). It can be accessed through
  *          @ref argo::env::cache_size() after argo::env::init() has been called.
  *
+ * @envvar{ARGO_WRITE_BUFFER_COUNT} request a specific number of write buffers
+ * @details This environment variable defaults to 8 write buffers if not specified.
+ *          It can be accessed through @ref argo::env::write_buffer_count() after
+ *          argo::env::init() has been called.
+ *
  * @envvar{ARGO_WRITE_BUFFER_SIZE} request a specific write buffer size in cache blocks
  * @details This environment variable defaults to 512 cache blocks if not specified.
  *          It can be accessed through @ref argo::env::write_buffer_size() after
@@ -79,6 +84,13 @@ namespace argo {
 		 * @see @ref ARGO_CACHE_SIZE
 		 */
 		std::size_t cache_size();
+
+		/**
+		 * @brief get the number of write buffers requested by environment variable
+		 * @return the requested number of write buffers
+		 * @see @ref ARGO_WRITE_BUFFER_COUNT
+		 */
+		std::size_t write_buffer_count();
 
 		/**
 		 * @brief get the write buffer size requested by environment variable
