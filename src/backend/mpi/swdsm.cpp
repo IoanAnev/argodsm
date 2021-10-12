@@ -58,7 +58,7 @@ pthread_rwlock_t sync_lock = PTHREAD_RWLOCK_INITIALIZER;
 
 /*Writebuffer*/
 /** @brief A write buffer storing cache indices */
-write_buffer<std::size_t>* argo_write_buffer;
+std::vector<write_buffer<std::size_t>> argo_write_buffer;
 
 /*MPI and Comm*/
 /** @brief  A copy of MPI_COMM_WORLD group to split up processes into smaller groups*/
@@ -503,7 +503,7 @@ void handler(int sig, siginfo_t *si, void *context){
 	double t2 = MPI_Wtime();
 	stats.storetime += t2-t1;
 	// TODO: Check if this actually needs to be outside
-	argo_write_buffer->add(startIndex);
+	argo_write_buffer[get_write_buffer(startIndex)].add(startIndex);
 	return;
 }
 
@@ -644,7 +644,7 @@ void load_cache_entry(std::uintptr_t aligned_access_offset) {
 				for(std::size_t j = 0; j < CACHELINE; j++){
 					storepageDIFF(idx+j,pagesize*j+(cacheControl[idx].tag));
 				}
-				argo_write_buffer->erase(idx);
+				argo_write_buffer[get_write_buffer(idx)].erase(idx);
 			}
 			/* Ensure the writeback has finished */
 			unlock_windows();
@@ -869,7 +869,6 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 
 
 	classificationSize = 2*(argo_size/pagesize);
-	argo_write_buffer = new write_buffer<std::size_t>();
 
 	int *workranks = (int *) malloc(sizeof(int)*numtasks);
 	int *procranks = (int *) malloc(sizeof(int)*2);
@@ -957,6 +956,8 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 		vm::map_memory(tmpcache, offsets_tbl_size_bytes, current_offset, PROT_READ|PROT_WRITE);
 	}
 
+	argo_write_buffer.resize(env::write_buffer_count());
+
 	num_data_windows = std::ceil(size_of_chunk/static_cast<double>(pagesize*CACHELINE*win_granularity));
 	// Create one data_window per page chunk
 	// TODO: Do we need the double dimensions or can each window be reused for another node?
@@ -1039,13 +1040,13 @@ void argo_finalize(){
 	MPI_Barrier(MPI_COMM_WORLD);
 
 	// Free data windows
-	for(auto win_index : data_windows){
+	for(auto &win_index : data_windows){
 		for( auto window : win_index){
 			MPI_Win_free(&window);
 		}
 	}
 	// Free sharer windows
-	for(auto win_index : sharer_windows){
+	for(auto &win_index : sharer_windows){
 		for( auto window : win_index){
 			MPI_Win_free(&window);
 		}
@@ -1073,7 +1074,9 @@ void self_invalidation(){
 			argo_byte dirty = cacheControl[i].dirty;
 
 			if(flushed == 0 && dirty == DIRTY){
-				argo_write_buffer->flush();
+				for(auto &write_buffer : argo_write_buffer){
+					write_buffer.flush();
+				};
 				flushed = 1;
 			}
 			std::size_t win_index = get_sharer_win_index(classidx);
@@ -1117,7 +1120,9 @@ void swdsm_argo_barrier(int n){ //BARRIER
 	if(pthread_mutex_trylock(&barriermutex) == 0){
 		barrierlockholder = pthread_self();
 		pthread_rwlock_wrlock(&sync_lock);
-		argo_write_buffer->flush();
+		for(auto &write_buffer : argo_write_buffer){
+			write_buffer.flush();
+		};
 		MPI_Barrier(workcomm);
 		self_invalidation();
 		pthread_rwlock_unlock(&sync_lock);
@@ -1180,7 +1185,9 @@ void argo_acquire(){
 void argo_release(){
 	int flag;
 	pthread_rwlock_wrlock(&sync_lock);
-	argo_write_buffer->flush();
+	for(auto &write_buffer : argo_write_buffer){
+		write_buffer.flush();
+	};
 	MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,workcomm,&flag,MPI_STATUS_IGNORE);
 	pthread_rwlock_unlock(&sync_lock);
 }
@@ -1265,9 +1272,19 @@ void print_statistics(){
 	 * Store statistics for the cache lock
 	 */
 	double cache_lock_time = 0;
-	for( auto cache_lock : cache_locks ) {
+	for( auto &cache_lock : cache_locks ) {
 		cache_lock_time += cache_lock.get_lock_time();
 	}
+
+	/**
+	 * Store statistics for the write buffers
+	 */
+	double flush_time(0), write_back_time(0), buffer_lock_time(0);
+	for( auto &write_buffer : argo_write_buffer) {
+		flush_time += write_buffer.get_flush_time();
+		write_back_time += write_buffer.get_write_back_time();
+		buffer_lock_time += write_buffer.get_buffer_lock_time();
+	};
 
 	/**
 	 *	Store MPI lock statistics for the data lock
@@ -1351,16 +1368,16 @@ void print_statistics(){
 		}
 
 		printf("\n#################################" YEL" ArgoDSM statistics " RESET "##################################\n");
-		printf("#  memory size: %12.2f%s  page size (p): %10dB   cache size:%14ldp\n",
+		printf("#  memory size: %12.2f%s  page size (p): %10dB   cache size: %13ldp\n",
 				mem_size_readable, sizes[order], pagesize, cachesize);
-		printf("#  write buffer size: %6ldp   write back size: %8ldp   CACHELINE:%15ldp\n",
+		printf("#  write buffer size: %6ldp   write back size: %8ldp   write buffers: %10ld\n",
 				env::write_buffer_size()/CACHELINE,
 				env::write_buffer_write_back_size()/CACHELINE,
-				CACHELINE);
+				env::write_buffer_count());
 		printf("#  allocation policy: %6ld    policy block size: %6ldp   load size: %14ldp\n",
 				env::allocation_policy(), env::allocation_block_size(), env::load_size());
-		printf("#  active time: %12.4fs   init time: %14.4fs\n",
-				stats.exectime, stats.inittime);
+		printf("#  active time: %12.4fs   init time: %14.4fs   CACHELINE: %14ldp\n",
+				stats.exectime, stats.inittime, CACHELINE);
 	}
 	for(int i=0; i<numtasks; i++){
 		MPI_Barrier(MPI_COMM_WORLD);
@@ -1384,9 +1401,7 @@ void print_statistics(){
 			/* Print write buffer info */
 			printf("#  " CYN "# Write buffer\n" RESET);
 			printf("#  flush time: %13.4fs   wrtbk time: %13.4fs   lock time: %14.4fs\n",
-					argo_write_buffer->get_flush_time(),
-					argo_write_buffer->get_write_back_time(),
-					argo_write_buffer->get_buffer_lock_time());
+					flush_time, write_back_time, buffer_lock_time);
 
 			/* Print cache lock info */
 			printf("#  " CYN "# Cache lock\n" RESET);
@@ -1470,7 +1485,7 @@ void add_to_locked(int data_win_index, int homenode){
 
 void unlock_windows() {
 	// Unlock all windows
-	for(auto p : locked_windows){
+	for(const auto &p : locked_windows){
 		mpi_lock_data[p.first][p.second].unlock(
 				p.second, data_windows[p.first][p.second]);
 	}
@@ -1485,3 +1500,7 @@ bool have_lock(int data_win_index, int homenode){
 	return it != locked_windows.end();
 }
 
+std::size_t get_write_buffer(std::size_t cache_index){
+	// Skew the calculation to avoid poor load balancing
+	return (cache_index + (cache_index / env::write_buffer_count()) + 1) % env::write_buffer_count();
+}

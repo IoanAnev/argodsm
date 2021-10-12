@@ -72,7 +72,7 @@ extern MPI_Comm workcomm;
  * @brief Write buffer to ensure selectively handled pages can be removed
  * @deprecated This should eventually be handled by a cache module
  */
-extern write_buffer<std::size_t>* argo_write_buffer;
+extern std::vector<write_buffer<std::size_t>> argo_write_buffer;
 
 namespace argo {
 	namespace backend {
@@ -119,7 +119,7 @@ namespace argo {
 					for(int i = 0; i <CACHELINE; i++){
 						storepageDIFF(cache_index+i,page_address+page_size*i);
 					}
-					argo_write_buffer->erase(cache_index);
+					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;
 				}
 
@@ -201,7 +201,7 @@ namespace argo {
 					for(int i = 0; i <CACHELINE; i++){
 						storepageDIFF(cache_index+i,page_address+page_size*i);
 					}
-					argo_write_buffer->erase(cache_index);
+					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;
 				}
 				cache_locks[cache_index].unlock();
