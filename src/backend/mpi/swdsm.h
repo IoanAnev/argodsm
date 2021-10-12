@@ -89,6 +89,10 @@ typedef struct argo_statisticsStruct
 		double storetime; 
 		/** @brief Time spent in global barrier */
 		double barriertime; 
+		/** @brief Time spent initializing ArgoDSM */
+		double inittime;
+		/** @brief Time between init and finalize */
+		double exectime;
 		/** @brief Number of stores */
 		unsigned long stores; 
 		/** @brief Number of loads */
