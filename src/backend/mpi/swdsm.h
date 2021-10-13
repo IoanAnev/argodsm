@@ -34,7 +34,7 @@
 #include <mutex>
 #include <functional>
 #include <cmath>
-//#include <shared_mutex>
+#include <vector>
 
 #include "argo.h"
 
@@ -433,6 +433,7 @@ std::size_t get_data_win_offset(std::size_t offset);
 bool have_lock(int data_win_index, int homenode);
 void add_to_locked(int data_win_index, int homenode);
 void unlock_windows();
+double stddev(const std::vector<double> &v);
 
 /**
  * @brief Returns the write buffer (by index) which the
