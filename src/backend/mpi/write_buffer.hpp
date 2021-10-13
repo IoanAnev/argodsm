@@ -62,6 +62,10 @@ class write_buffer
 		double _write_back_time;
 		double _buffer_lock_time;
 
+		/** @brief Stat keeping for the write buffer */
+		std::size_t _page_count;
+		std::size_t _partial_flush_count;
+
 		/**
 		 * @brief	Check if the write buffer is empty
 		 * @return	True if empty, else False
@@ -223,7 +227,9 @@ class write_buffer
 			_write_back_size(argo::env::write_buffer_write_back_size()/CACHELINE),
 			_flush_time(0),
 			_write_back_time(0),
-			_buffer_lock_time(0) { }
+			_buffer_lock_time(0),
+			_page_count(0),
+			_partial_flush_count(0) { }
 
 		/**
 		 * @brief	Copy constructor
@@ -240,6 +246,8 @@ class write_buffer
 			_flush_time = other._flush_time;
 			_write_back_time = other._write_back_time;
 			_buffer_lock_time = other._buffer_lock_time;
+			_page_count = other._page_count;
+			_partial_flush_count = other._partial_flush_count;
 		}
 
 		/**
@@ -261,6 +269,8 @@ class write_buffer
 				_flush_time = other._flush_time;
 				_write_back_time = other._write_back_time;
 				_buffer_lock_time = other._buffer_lock_time;
+				_page_count = other._page_count;
+				_partial_flush_count = other._partial_flush_count;
 			}
 			return *this;
 		}
@@ -280,6 +290,8 @@ class write_buffer
 			_flush_time = std::move(other._flush_time);
 			_write_back_time = std::move(other._write_back_time);
 			_buffer_lock_time = std::move(other._buffer_lock_time);
+			_page_count = std::move(other._page_count);
+			_partial_flush_count = std::move(other._partial_flush_count);
 		}
 
 		/**
@@ -300,6 +312,8 @@ class write_buffer
 				_flush_time = std::move(other._flush_time);
 				_write_back_time = std::move(other._write_back_time);
 				_buffer_lock_time = std::move(other._buffer_lock_time);
+				_page_count = std::move(other._page_count);
+				_partial_flush_count = std::move(other._partial_flush_count);
 			}
 			return *this;
 		}
@@ -375,10 +389,12 @@ class write_buffer
 			// If the buffer is full, write back _write_back_size indices
 			if(size() >= _max_size){
 				flush_partial();
+				_partial_flush_count++;
 			}
 
 			// Add val to the back of the buffer
 			emplace_back(val);
+			_page_count++;
 		}
 
 		/**
@@ -414,6 +430,22 @@ class write_buffer
 		std::size_t get_size() {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _buffer.size();
+		}
+
+		/**
+		 * @brief get total number of pages added
+		 */
+		std::size_t get_page_count() {
+			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			return _page_count;
+		}
+
+		/**
+		 * @brief get the number of times partially flushed
+		 */
+		std::size_t get_partial_flush_count() {
+			std::lock_guard<std::mutex> lock(_buffer_mutex);
+			return _partial_flush_count;
 		}
 
 }; //class

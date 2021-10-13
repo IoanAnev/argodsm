@@ -6,6 +6,7 @@
 #include<cstddef>
 #include<vector>
 #include <memory>
+#include <numeric>
 
 #include "env/env.hpp"
 #include "signal/signal.hpp"
@@ -1280,79 +1281,146 @@ void print_statistics(){
 	 * Store statistics for the write buffers
 	 */
 	double flush_time(0), write_back_time(0), buffer_lock_time(0);
+	std::size_t max_page_count(0), max_partial_flush_count(0);
+	std::vector<double> page_count, partial_flush_count;
+
+	// Iterate over all buffers
 	for( auto &write_buffer : argo_write_buffer) {
+		// Add total times
 		flush_time += write_buffer.get_flush_time();
 		write_back_time += write_buffer.get_write_back_time();
 		buffer_lock_time += write_buffer.get_buffer_lock_time();
-	};
+
+		// Store number of pages added per buffer and max number
+		std::size_t pages = write_buffer.get_page_count();
+		page_count.push_back(pages);
+		if(pages > max_page_count) {
+			max_page_count = pages;
+		}
+
+		// Store number of flushes per buffer and max number
+		std::size_t flushes = write_buffer.get_partial_flush_count();
+		partial_flush_count.push_back(flushes);
+		if(flushes > max_partial_flush_count) {
+			max_partial_flush_count = flushes;
+		}
+	}
+	// Calculate the standard deviation of the load weights
+	double stddev_page_count = 0;
+	if(max_page_count > 0) {
+		for(auto &e : page_count) {
+			// Normalize to max load
+			e /= max_page_count;
+		}
+		stddev_page_count = stddev(page_count);
+	}
+
+	// Calculate the standard deviation of the load weights
+	double stddev_partial_flush_count = 0;
+	if(max_partial_flush_count > 0) {
+		for(auto &e : partial_flush_count) {
+			// Normalize to max load
+			e /= max_partial_flush_count;
+		}
+		stddev_partial_flush_count = stddev(partial_flush_count);
+	}
+
 
 	/**
 	 *	Store MPI lock statistics for the data lock
 	 */
-	double data_total_lock_time(0), data_avg_lock_time(0), data_max_lock_time(0);
-	double data_total_unlock_time(0), data_avg_unlock_time(0), data_max_unlock_time(0);
-	double data_mpi_lock_time(0), data_mpi_unlock_time(0);
-	double data_total_hold_time(0), data_avg_hold_time(0), data_max_hold_time(0);
-	int data_num_locks(0);
+	std::size_t data_num_locks(0);
+	double data_spin_lock_time(0), data_spin_avg_lock_time(0), data_spin_max_lock_time(0);
+	double data_spin_hold_time(0), data_spin_avg_hold_time(0), data_spin_max_hold_time(0);
+
+	double data_mpi_lock_time(0), data_mpi_avg_lock_time(0), data_mpi_max_lock_time(0);
+	double data_mpi_unlock_time(0), data_mpi_avg_unlock_time(0), data_mpi_max_unlock_time(0);
+	double data_mpi_hold_time(0), data_mpi_avg_hold_time(0), data_mpi_max_hold_time(0);
 
 	for(std::size_t i=0; i<num_data_windows; i++){
 		for(int j=0; j<numtasks; j++){
-			data_total_lock_time += mpi_lock_data[i][j].get_locktime();
-			data_total_unlock_time += mpi_lock_data[i][j].get_unlocktime();
-			data_mpi_lock_time += mpi_lock_data[i][j].get_mpilocktime();
-			data_mpi_unlock_time += mpi_lock_data[i][j].get_mpiunlocktime();
-			data_total_hold_time += mpi_lock_data[i][j].get_holdtime();
+			/* Get number of locks */
+			data_num_locks += mpi_lock_data[i][j].get_num_locks();
 
-			if(mpi_lock_data[i][j].get_maxlocktime() > data_max_lock_time){
-				data_max_lock_time = mpi_lock_data[i][j].get_maxlocktime();
+			/* Get spin lock stats */
+			data_spin_lock_time 		+= 	mpi_lock_data[i][j].get_spin_lock_time();
+			data_spin_hold_time 		+= 	mpi_lock_data[i][j].get_spin_hold_time();
+			if(mpi_lock_data[i][j].get_max_spin_lock_time() > data_spin_max_lock_time){
+				data_spin_max_lock_time = mpi_lock_data[i][j].get_max_spin_lock_time();
 			}
-			if(mpi_lock_data[i][j].get_maxunlocktime() > data_max_unlock_time){
-				data_max_unlock_time = mpi_lock_data[i][j].get_maxunlocktime();
+			if(mpi_lock_data[i][j].get_max_spin_hold_time() > data_spin_max_hold_time){
+				data_spin_max_hold_time = mpi_lock_data[i][j].get_max_spin_hold_time();
 			}
-			if(mpi_lock_data[i][j].get_maxholdtime() > data_max_hold_time){
-				data_max_hold_time = mpi_lock_data[i][j].get_maxholdtime();
+
+			/* Get mpi lock stats */
+			data_mpi_lock_time 			+= 	mpi_lock_data[i][j].get_mpi_lock_time();
+			data_mpi_unlock_time 		+= 	mpi_lock_data[i][j].get_mpi_unlock_time();
+			data_mpi_hold_time 			+=	mpi_lock_data[i][j].get_mpi_hold_time();
+			if(mpi_lock_data[i][j].get_max_mpi_lock_time() > data_mpi_max_lock_time){
+				data_mpi_max_lock_time = mpi_lock_data[i][j].get_max_mpi_lock_time();
 			}
-			data_num_locks += mpi_lock_data[i][j].get_numlocks();
+			if(mpi_lock_data[i][j].get_max_mpi_unlock_time() > data_mpi_max_unlock_time){
+				data_mpi_max_unlock_time = mpi_lock_data[i][j].get_max_mpi_unlock_time();
+			}
+			if(mpi_lock_data[i][j].get_max_mpi_hold_time() > data_mpi_max_hold_time){
+				data_mpi_max_hold_time = mpi_lock_data[i][j].get_max_mpi_hold_time();
+			}
 		}
 	}
 	/** Get averages */
-	data_avg_lock_time = data_total_lock_time / data_num_locks;
-	data_avg_unlock_time = data_total_unlock_time / data_num_locks;
-	data_avg_hold_time = data_total_hold_time / data_num_locks;
+	data_spin_avg_lock_time 	= data_spin_lock_time / data_num_locks;
+	data_spin_avg_hold_time 	= data_spin_hold_time / data_num_locks;
+	data_mpi_avg_lock_time 		= data_mpi_lock_time / data_num_locks;
+	data_mpi_avg_unlock_time 	= data_mpi_unlock_time / data_num_locks;
+	data_mpi_avg_hold_time 		= data_mpi_hold_time / data_num_locks;
 
 	/**
 	 *	Store MPI lock statistics for the sharer lock
 	 */
-	double sharer_total_lock_time(0), sharer_avg_lock_time(0), sharer_max_lock_time(0);
-	double sharer_total_unlock_time(0), sharer_avg_unlock_time(0), sharer_max_unlock_time(0);
-	double sharer_mpi_lock_time(0), sharer_mpi_unlock_time(0);
-	double sharer_total_hold_time(0), sharer_avg_hold_time(0), sharer_max_hold_time(0);
-	int sharer_num_locks(0);
+	std::size_t sharer_num_locks(0);
+	double sharer_spin_lock_time(0), sharer_spin_avg_lock_time(0), sharer_spin_max_lock_time(0);
+	double sharer_spin_hold_time(0), sharer_spin_avg_hold_time(0), sharer_spin_max_hold_time(0);
+
+	double sharer_mpi_lock_time(0), sharer_mpi_avg_lock_time(0), sharer_mpi_max_lock_time(0);
+	double sharer_mpi_unlock_time(0), sharer_mpi_avg_unlock_time(0), sharer_mpi_max_unlock_time(0);
+	double sharer_mpi_hold_time(0), sharer_mpi_avg_hold_time(0), sharer_mpi_max_hold_time(0);
 
 	for(std::size_t i=0; i<num_sharer_windows; i++){
 		for(int j=0; j<numtasks; j++){
-			sharer_total_lock_time += mpi_lock_sharer[i][j].get_locktime();
-			sharer_total_unlock_time += mpi_lock_sharer[i][j].get_unlocktime();
-			sharer_mpi_lock_time += mpi_lock_sharer[i][j].get_mpilocktime();
-			sharer_mpi_unlock_time += mpi_lock_sharer[i][j].get_mpiunlocktime();
-			sharer_total_hold_time += mpi_lock_sharer[i][j].get_holdtime();
+			/* Get number of locks */
+			sharer_num_locks += mpi_lock_sharer[i][j].get_num_locks();
 
-			if(mpi_lock_sharer[i][j].get_maxlocktime() > sharer_max_lock_time){
-				sharer_max_lock_time = mpi_lock_sharer[i][j].get_maxlocktime();
+			/* Get spin lock stats */
+			sharer_spin_lock_time 		+= 	mpi_lock_sharer[i][j].get_spin_lock_time();
+			sharer_spin_hold_time 		+= 	mpi_lock_sharer[i][j].get_spin_hold_time();
+			if(mpi_lock_sharer[i][j].get_max_spin_lock_time() > sharer_spin_max_lock_time){
+				sharer_spin_max_lock_time = mpi_lock_sharer[i][j].get_max_spin_lock_time();
 			}
-			if(mpi_lock_sharer[i][j].get_maxunlocktime() > sharer_max_unlock_time){
-				sharer_max_unlock_time = mpi_lock_sharer[i][j].get_maxunlocktime();
+			if(mpi_lock_sharer[i][j].get_max_spin_hold_time() > sharer_spin_max_hold_time){
+				sharer_spin_max_hold_time = mpi_lock_sharer[i][j].get_max_spin_hold_time();
 			}
-			if(mpi_lock_sharer[i][j].get_maxholdtime() > sharer_max_hold_time){
-				sharer_max_hold_time = mpi_lock_sharer[i][j].get_maxholdtime();
+
+			/* Get mpi lock stats */
+			sharer_mpi_lock_time 			+= 	mpi_lock_sharer[i][j].get_mpi_lock_time();
+			sharer_mpi_unlock_time 		+= 	mpi_lock_sharer[i][j].get_mpi_unlock_time();
+			sharer_mpi_hold_time 			+=	mpi_lock_sharer[i][j].get_mpi_hold_time();
+			if(mpi_lock_sharer[i][j].get_max_mpi_lock_time() > sharer_mpi_max_lock_time){
+				sharer_mpi_max_lock_time = mpi_lock_sharer[i][j].get_max_mpi_lock_time();
 			}
-			sharer_num_locks += mpi_lock_sharer[i][j].get_numlocks();
+			if(mpi_lock_sharer[i][j].get_max_mpi_unlock_time() > sharer_mpi_max_unlock_time){
+				sharer_mpi_max_unlock_time = mpi_lock_sharer[i][j].get_max_mpi_unlock_time();
+			}
+			if(mpi_lock_sharer[i][j].get_max_mpi_hold_time() > sharer_mpi_max_hold_time){
+				sharer_mpi_max_hold_time = mpi_lock_sharer[i][j].get_max_mpi_hold_time();
+			}
 		}
 	}
 	/** Get averages */
-	sharer_avg_lock_time = sharer_total_lock_time / sharer_num_locks;
-	sharer_avg_unlock_time = sharer_total_unlock_time / sharer_num_locks;
-	sharer_avg_hold_time = sharer_total_hold_time / sharer_num_locks;
+	sharer_spin_avg_lock_time 	= sharer_spin_lock_time / sharer_num_locks;
+	sharer_spin_avg_hold_time 	= sharer_spin_hold_time / sharer_num_locks;
+	sharer_mpi_avg_lock_time 		= sharer_mpi_lock_time / sharer_num_locks;
+	sharer_mpi_avg_unlock_time 	= sharer_mpi_unlock_time / sharer_num_locks;
+	sharer_mpi_avg_hold_time 		= sharer_mpi_hold_time / sharer_num_locks;
 
 
 	/** Nicely format and print the results */
@@ -1402,6 +1470,8 @@ void print_statistics(){
 			printf("#  " CYN "# Write buffer\n" RESET);
 			printf("#  flush time: %13.4fs   wrtbk time: %13.4fs   lock time: %14.4fs\n",
 					flush_time, write_back_time, buffer_lock_time);
+			printf("#  load stddev: %12.4f%%   flush stddev: %11.4f%%\n",
+					stddev_page_count*100, stddev_partial_flush_count*100);
 
 			/* Print cache lock info */
 			printf("#  " CYN "# Cache lock\n" RESET);
@@ -1409,26 +1479,31 @@ void print_statistics(){
 					cache_lock_time);
 
 			/* Print data lock info */
-			printf("#  " CYN "# Data lock  \t(%d locks held)\n" RESET, data_num_locks);
-			printf("#  ttl lock time: %10.4fs   avg lock time: %10.4fs   max lock time: %10.4fs\n",
-					data_total_lock_time, data_avg_lock_time, data_max_lock_time);
-			printf("#  ttl unlock time: %8.4fs   avg unlock time: %8.4fs   max unlock time: %8.4fs\n",
-					data_total_unlock_time, data_avg_unlock_time, data_max_unlock_time);
-			printf("#  ttl hold time: %10.4fs   avg hold time: %10.4fs   max hold time: %10.4fs\n",
-					data_total_hold_time, data_avg_hold_time, data_max_hold_time);
-			printf("#  mpi lock time: %10.4fs   mpi unlock time: %8.4fs\n",
-					data_mpi_lock_time, data_mpi_unlock_time);
+			printf("#  " CYN "# Data lock  \t(%zu locks held)\n" RESET, data_num_locks);
+			printf("#  spin lock time: %9.4fs   avg lock time: %10.4fs   max lock time: %10.4fs\n",
+					data_spin_lock_time, data_spin_avg_lock_time, data_spin_max_lock_time);
+			printf("#  spin hold time: %9.4fs   avg hold time: %10.4fs   max hold time: %10.4fs\n",
+					data_spin_hold_time, data_spin_avg_hold_time, data_spin_max_hold_time);
+			printf("#  mpi lock time: %10.4fs   avg lock time: %10.4fs   max lock time: %10.4fs\n",
+					data_mpi_lock_time, data_mpi_avg_lock_time, data_mpi_max_lock_time);
+			printf("#  mpi unlock time: %8.4fs   avg unlock time: %8.4fs   max unlock time: %8.4fs\n",
+					data_mpi_unlock_time, data_mpi_avg_unlock_time, data_mpi_max_unlock_time);
+			printf("#  mpi hold time: %10.4fs   avg hold time: %10.4fs   max hold time: %10.4fs\n",
+					data_mpi_hold_time, data_mpi_avg_hold_time, data_mpi_max_hold_time);
+
 
 			/* Print sharer lock info */
-			printf("#  " CYN "# Sharer lock\t(%d locks held)\n" RESET, sharer_num_locks);
-			printf("#  ttl lock time: %10.4fs   avg lock time: %10.4fs   max lock time: %10.4fs\n",
-					sharer_total_lock_time, sharer_avg_lock_time, sharer_max_lock_time);
-			printf("#  ttl unlock time: %8.4fs   avg unlock time: %8.4fs   max unlock time: %8.4fs\n",
-					sharer_total_unlock_time, sharer_avg_unlock_time, sharer_max_unlock_time);
-			printf("#  ttl hold time: %10.4fs   avg hold time: %10.4fs   max hold time: %10.4fs\n",
-					sharer_total_hold_time, sharer_avg_hold_time, sharer_max_hold_time);
-			printf("#  mpi lock time: %10.4fs   mpi unlock time: %8.4fs\n",
-					sharer_mpi_lock_time, sharer_mpi_unlock_time);
+			printf("#  " CYN "# Sharer lock  \t(%zu locks held)\n" RESET, sharer_num_locks);
+			printf("#  spin lock time: %9.4fs   avg lock time: %10.4fs   max lock time: %10.4fs\n",
+					sharer_spin_lock_time, sharer_spin_avg_lock_time, sharer_spin_max_lock_time);
+			printf("#  spin hold time: %9.4fs   avg hold time: %10.4fs   max hold time: %10.4fs\n",
+					sharer_spin_hold_time, sharer_spin_avg_hold_time, sharer_spin_max_hold_time);
+			printf("#  mpi lock time: %10.4fs   avg lock time: %10.4fs   max lock time: %10.4fs\n",
+					sharer_mpi_lock_time, sharer_mpi_avg_lock_time, sharer_mpi_max_lock_time);
+			printf("#  mpi unlock time: %8.4fs   avg unlock time: %8.4fs   max unlock time: %8.4fs\n",
+					sharer_mpi_unlock_time, sharer_mpi_avg_unlock_time, sharer_mpi_max_unlock_time);
+			printf("#  mpi hold time: %10.4fs   avg hold time: %10.4fs   max hold time: %10.4fs\n",
+					sharer_mpi_hold_time, sharer_mpi_avg_hold_time, sharer_mpi_max_hold_time);
 			printf("\n");
 			fflush(stdout);
 		}
@@ -1503,4 +1578,14 @@ bool have_lock(int data_win_index, int homenode){
 std::size_t get_write_buffer(std::size_t cache_index){
 	// Skew the calculation to avoid poor load balancing
 	return (cache_index + (cache_index / env::write_buffer_count()) + 1) % env::write_buffer_count();
+}
+
+double stddev(const std::vector<double> &v){
+	double sum = std::accumulate(v.begin(), v.end(), 0.0);
+	double mean = sum / v.size();
+
+	std::vector<double> diff(v.size());
+	std::transform(v.begin(), v.end(), diff.begin(), [mean](double x) { return x - mean; });
+	double sq_sum = std::inner_product(diff.begin(), diff.end(), diff.begin(), 0.0);
+	return std::sqrt(sq_sum / v.size());
 }
