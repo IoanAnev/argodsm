@@ -429,7 +429,7 @@ class write_buffer
 		}
 
 		/**
-		 * @brief get buffer size
+		 * @brief	get buffer size
 		 */
 		std::size_t get_size() {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
@@ -437,7 +437,7 @@ class write_buffer
 		}
 
 		/**
-		 * @brief get total number of pages added
+		 * @brief	get total number of pages added
 		 */
 		std::size_t get_page_count() {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
@@ -445,13 +445,24 @@ class write_buffer
 		}
 
 		/**
-		 * @brief get the number of times partially flushed
+		 * @brief	get the number of times partially flushed
 		 */
 		std::size_t get_partial_flush_count() {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _partial_flush_count;
 		}
 
+		/**
+		 * @brief	reset all statistics
+		 * @note	this does not reset the actual write buffer
+		 */
+		void reset_stats() {
+			_flush_time = 0;
+			_write_back_time = 0;
+			_buffer_lock_time = 0;
+			_page_count = 0;
+			_partial_flush_count = 0;
+		}
 }; //class
 
 #endif /* argo_write_buffer_hpp */

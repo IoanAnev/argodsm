@@ -125,6 +125,8 @@ namespace argo {
 			return true;
 		}
 
+		void argo_reset_stats() {}
+
 		void finalize() {
 		}
 
