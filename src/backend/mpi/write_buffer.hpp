@@ -158,6 +158,11 @@ class write_buffer
 				// call to write back a cached page
 				std::size_t cache_index = pop();
 				cache_locks[cache_index].lock();
+				if(cacheControl[cache_index].dirty != DIRTY) {
+					// Don't attempt to write back pages that are CLEAN
+					cache_locks[cache_index].unlock();
+					continue;
+				}
 				std::uintptr_t page_address = cacheControl[cache_index].tag;
 				void* page_ptr = static_cast<char*>(
 						argo::virtual_memory::start_address()) + page_address;
@@ -171,7 +176,6 @@ class write_buffer
 				cache_locks[cache_index].unlock();
 				// Close any windows used to write back data
 				// This should be replaced with an API call
-				// TODO: Any impact of moving this outside?
 				unlock_windows();
 			}
 			double t_stop = MPI_Wtime();
