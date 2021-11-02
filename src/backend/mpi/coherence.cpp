@@ -152,7 +152,9 @@ namespace argo {
 			}
 
 			double t2 = MPI_Wtime();
-			stats.ssitime += t2-t1;
+			auto current = stats.ssi_time.load();
+			while (!stats.ssi_time.compare_exchange_weak(current, current+t2-t1))
+				;
 
 			// Poke the MPI system to force progress
 			int flag;
@@ -210,7 +212,9 @@ namespace argo {
 			}
 
 			double t2 = MPI_Wtime();
-			stats.ssdtime += t2-t1;
+			auto current = stats.ssd_time.load();
+			while (!stats.ssd_time.compare_exchange_weak(current, current+t2-t1))
+				;
 
 			// Poke the MPI system to force progress
 			int flag;
