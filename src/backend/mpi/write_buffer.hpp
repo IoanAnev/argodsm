@@ -29,7 +29,10 @@ extern control_data* cacheControl;
 /** @brief Block size based on backend definition */
 const std::size_t block_size = page_size*CACHELINE;
 
-//TODO: Document
+/**
+ * @brief		Argo cache lock structure
+ * @deprecated 	prototype implementation, should be replaced with API calls
+ */
 extern std::vector<cache_lock> cache_locks;
 
 /**
@@ -55,15 +58,23 @@ class write_buffer
 
 		/** @brief	Mutex to protect the write buffer from simultaneous accesses */
 		mutable std::mutex _buffer_mutex;
+
+		/**
+		 * @brief	Mutex to protect the internal buffer from simultaneous accesses
+		 * during multi-threaded writeback
+		 */
 		mutable std::mutex _parallel_flush_mutex;
 
-		/** @brief Time keeping for the write buffer */
+		/** @brief Time spent flushing the write buffer */
 		double _flush_time;
+		/** @brief Time spent writing back pages from full write buffer */
 		double _write_back_time;
+		/** @brief Time spent attempting to lock the write buffer */
 		double _buffer_lock_time;
 
-		/** @brief Stat keeping for the write buffer */
+		/** @brief Number of pages added to the write buffer */
 		std::size_t _page_count;
+		/** @brief Number of times partially flushed (when full) */
 		std::size_t _partial_flush_count;
 
 		/**
@@ -173,10 +184,10 @@ class write_buffer
 				for(int i=0; i < CACHELINE; i++){
 					storepageDIFF(cache_index+i,page_size*i+page_address);
 				}
-				cache_locks[cache_index].unlock();
 				// Close any windows used to write back data
 				// This should be replaced with an API call
 				unlock_windows();
+				cache_locks[cache_index].unlock();
 			}
 			double t_stop = MPI_Wtime();
 			_write_back_time += t_stop-t_start;
@@ -430,6 +441,7 @@ class write_buffer
 
 		/**
 		 * @brief	get buffer size
+		 * @return	the size
 		 */
 		std::size_t get_size() {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
@@ -438,6 +450,7 @@ class write_buffer
 
 		/**
 		 * @brief	get total number of pages added
+		 * @return	number of pages added
 		 */
 		std::size_t get_page_count() {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
@@ -446,6 +459,7 @@ class write_buffer
 
 		/**
 		 * @brief	get the number of times partially flushed
+		 * @return	number of times partially flushed
 		 */
 		std::size_t get_partial_flush_count() {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
@@ -457,6 +471,7 @@ class write_buffer
 		 * @note	this does not reset the actual write buffer
 		 */
 		void reset_stats() {
+			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			_flush_time = 0;
 			_write_back_time = 0;
 			_buffer_lock_time = 0;
