@@ -12,6 +12,11 @@
 /* Includes */
 #include <cstdint>
 #include <type_traits>
+#include <mutex>
+#include <functional>
+#include <cmath>
+#include <vector>
+#include <atomic>
 
 #include <assert.h>
 #include <errno.h>
@@ -31,11 +36,6 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
-#include <mutex>
-#include <functional>
-#include <cmath>
-#include <vector>
-#include <atomic>
 
 #include "argo.h"
 
@@ -136,7 +136,9 @@ class alignas(64) cache_lock {
 		std::size_t num_locks;
 
 	public:
-		/** @brief Constructor */
+		/**
+		 * @brief Constructor
+		 */
 		cache_lock()
 			: wait_time(0),
 			hold_time(0),
@@ -144,6 +146,10 @@ class alignas(64) cache_lock {
 			num_locks(0)
 		{ };
 
+		/**
+		 * @brief Copy constructor
+		 * @param _other cache_lock to copy from
+		 */
 		cache_lock( const cache_lock& _other )
 			: wait_time(_other.wait_time),
 			hold_time(_other.hold_time),
@@ -151,6 +157,10 @@ class alignas(64) cache_lock {
 			num_locks(_other.num_locks)
 		{ };
 
+		/**
+		 * @brief Move constructor
+		 * @param _other cache_lock to move
+		 */
 		cache_lock( const cache_lock&& _other )
 			: wait_time(std::move(_other.wait_time)),
 			hold_time(std::move(_other.hold_time)),
@@ -158,7 +168,7 @@ class alignas(64) cache_lock {
 			num_locks(std::move(_other.num_locks))
 		{ };
 
-		/** Destructor */
+		/** @brief Destructor */
 		~cache_lock() { };
 
 		/** @brief Acquire a cache lock */
@@ -171,6 +181,10 @@ class alignas(64) cache_lock {
 			num_locks++;
 		}
 
+		/**
+		 * @brief Attempt to acquire a cache lock
+		 * @return True if successful, else false
+		 */
 		bool try_lock(){
 			return c_mutex.try_lock();
 		}
@@ -464,21 +478,76 @@ unsigned long get_classification_index(uint64_t addr);
 bool _is_cached(std::size_t addr);
 
 /**
- * @brief TODO document this
+ * @brief Locks the correct mpi_lock_sharer, performs operation
+ * op and then unlocks the locked mpi_lock_sharer
+ * @param lock_type MPI lock type
+ * @param rank remote node to perform op on
+ * @param offset the offset in to the remote node's globalSharer
+ * data structure
+ * @param op A function to execute
  */
 void sharer_op(int lock_type, int rank, int offset,
 		std::function<void(const std::size_t window_index)> op);
 
 /**
- * @brief TODO document all these
+ * @brief Gets the sharer window index based on the classification
+ * index
+ * @param classification_index the page classification index
+ * @return the sharer window index
  */
 std::size_t get_sharer_win_index(int classification_index);
+
+/**
+ * @brief Gets the sharer window offset based on the classification
+ * index
+ * @param classification_index the page classification index
+ * @return the offset in to the sharer window
+ */
 std::size_t get_sharer_win_offset(int classification_index);
+
+/**
+ * @brief Gets the data window index based on the offset into the
+ * node's backing store
+ * @param offset the page offset in to the remote node's backing
+ * store
+ * @return the data window index
+ */
 std::size_t get_data_win_index(std::size_t offset);
+
+/**
+ * @brief Gets the sharer window offset based on the classification
+ * index
+ * @param offset the page offset in to the remote node's backing
+ * store
+ * @return the offset in to the sharer window
+ */
 std::size_t get_data_win_offset(std::size_t offset);
+
+/**
+ * @brief Check if a data window lock is locked by the caller
+ * @param data_win_index The index of the data window
+ * @param homenode The id of the node to check the lock for
+ * @return True if locked by the caller, else false
+ */
 bool have_lock(int data_win_index, int homenode);
+
+/**
+ * @brief Add a data window index and homenode as locked
+ * @param data_win_index The index of the data window
+ * @param homenode The id of the node to add the lock for
+ */
 void add_to_locked(int data_win_index, int homenode);
+
+/**
+ * @brief Unlock all data windows locked by the caller
+ */
 void unlock_windows();
+
+/**
+ * @brief Calculate the standard deviation for v
+ * @param v a vector of doubles by reference
+ * @return The standard deviation for all values in v
+ */
 double stddev(const std::vector<double> &v);
 
 /**

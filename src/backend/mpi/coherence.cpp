@@ -22,11 +22,6 @@ extern control_data *cacheControl;
  * @deprecated Should eventually be handled by a cache module
  */
 extern unsigned long *globalSharers;
-///**
-// * @brief A cache mutex protects all operations on cacheControl
-// * @deprecated Should eventually be handled by a cache module
-// */
-//extern pthread_mutex_t cachemutex;
 /**
  * @brief A vector containing cache locks
  * @deprecated Should eventually be handled by a cache module
@@ -37,12 +32,6 @@ extern std::vector<cache_lock> cache_locks;
  * write access to the whole cache.
  */
 extern pthread_rwlock_t sync_lock;
-/**
- * @brief data_windows need to be explicitly closed by the
- * caller of storepageDIFF
- * @deprecated Should eventually be handled through API functions
- */
-extern std::vector<std::vector<MPI_Win>> data_windows;
 /**
  * @brief sharer_windows protects the pyxis directory
  * @deprecated Should not be needed once the pyxis directory is
@@ -92,7 +81,6 @@ namespace argo {
 
 			// Lock relevant mutexes. Start statistics timekeeping
 			double t1 = MPI_Wtime();
-			//pthread_mutex_lock(&cachemutex);
 			pthread_rwlock_rdlock(&sync_lock);
 
 			// Iterate over all pages to selectively invalidate
@@ -122,6 +110,8 @@ namespace argo {
 					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;
 				}
+				// Make sure to sync writebacks
+				unlock_windows();
 
 				std::size_t win_index = get_sharer_win_index(classification_index);
 				// Optimization to keep pages in cache if they do not
@@ -147,8 +137,6 @@ namespace argo {
 					mprotect((char*)start_address + page_address, block_size, PROT_NONE);
 				}
 				cache_locks[cache_index].unlock();
-				// Make sure to sync writebacks
-				unlock_windows();
 			}
 
 			double t2 = MPI_Wtime();
@@ -206,9 +194,9 @@ namespace argo {
 					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;
 				}
-				cache_locks[cache_index].unlock();
 				// Make sure to sync writebacks
 				unlock_windows();
+				cache_locks[cache_index].unlock();
 			}
 
 			double t2 = MPI_Wtime();
