@@ -138,11 +138,7 @@ namespace argo {
 				}
 				cache_locks[cache_index].unlock();
 			}
-
 			double t2 = MPI_Wtime();
-			auto current = stats.ssi_time.load();
-			while (!stats.ssi_time.compare_exchange_weak(current, current+t2-t1))
-				;
 
 			// Poke the MPI system to force progress
 			int flag;
@@ -150,6 +146,9 @@ namespace argo {
 
 			// Release relevant mutexes
 			pthread_rwlock_unlock(&sync_lock);
+
+			std::lock_guard<std::mutex> ssi_time_lock(stats.ssi_time_mutex);
+			stats.ssi_time += t2-t1;
 		}
 
 		void _selective_release(void *addr, std::size_t size){
@@ -199,11 +198,7 @@ namespace argo {
 				unlock_windows();
 				cache_locks[cache_index].unlock();
 			}
-
 			double t2 = MPI_Wtime();
-			auto current = stats.ssd_time.load();
-			while (!stats.ssd_time.compare_exchange_weak(current, current+t2-t1))
-				;
 
 			// Poke the MPI system to force progress
 			int flag;
@@ -211,6 +206,9 @@ namespace argo {
 
 			// Release relevant mutexes
 			pthread_rwlock_unlock(&sync_lock);
+
+			std::lock_guard<std::mutex> ssd_time_lock(stats.ssd_time_mutex);
+			stats.ssd_time += t2-t1;
 		}
 	} //namespace backend
 } //namespace argo
