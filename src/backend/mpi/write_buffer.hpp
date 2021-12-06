@@ -81,7 +81,7 @@ class write_buffer
 		 * @brief	Check if the write buffer is empty
 		 * @return	True if empty, else False
 		 */
-		bool empty() {
+		bool empty() const {
 			return _buffer.empty();
 		}
 
@@ -89,7 +89,7 @@ class write_buffer
 		 * @brief	Get the size of the buffer
 		 * @return	The size of the buffer
 		 */
-		size_t size() {
+		size_t size() const {
 			return _buffer.size();
 		}
 
@@ -98,7 +98,7 @@ class write_buffer
 		 * @param	i The requested buffer index
 		 * @return	The element at index i of type T
 		 */
-		T at(std::size_t i){
+		T at(std::size_t i) const {
 			return _buffer.at(i);
 		}
 
@@ -167,14 +167,14 @@ class write_buffer
 			for(std::size_t i = 0; i < _write_back_size; i++) {
 				// The code below should be replaced with a cache API
 				// call to write back a cached page
-				std::size_t cache_index = pop();
+				const std::size_t cache_index = pop();
 				cache_locks[cache_index].lock();
 				if(cacheControl[cache_index].dirty != DIRTY) {
 					// Don't attempt to write back pages that are CLEAN
 					cache_locks[cache_index].unlock();
 					continue;
 				}
-				std::uintptr_t page_address = cacheControl[cache_index].tag;
+				const std::uintptr_t page_address = cacheControl[cache_index].tag;
 				void* page_ptr = static_cast<char*>(
 						argo::virtual_memory::start_address()) + page_address;
 
@@ -198,7 +198,7 @@ class write_buffer
 		 * 			until there are no elements left.
 		 */
 		void process_buffer(){
-			std::size_t block_size = argo::env::mpi_win_granularity();
+			const std::size_t block_size = argo::env::mpi_win_granularity();
 
 			// Continue until the buffer is empty
 			while(!empty()) {
@@ -217,7 +217,7 @@ class write_buffer
 
 				// For each index, handle the corresponding ArgoDSM page
 				for(auto cache_index : cache_indices) {
-					std::uintptr_t page_address = cacheControl[cache_index].tag;
+					const std::uintptr_t page_address = cacheControl[cache_index].tag;
 					void* page_ptr = static_cast<char*>(
 							argo::virtual_memory::start_address()) + page_address;
 
@@ -368,8 +368,9 @@ class write_buffer
 			sort();
 
 			// Start an appropriate amount of workers
-			std::size_t hwthreads = std::thread::hardware_concurrency();
-			std::size_t nthreads = hwthreads > 1 ? hwthreads/2 : 1;
+			// TODO: Should this be used when flush is called instead?
+			const std::size_t hwthreads = std::thread::hardware_concurrency();
+			const std::size_t nthreads = hwthreads > 1 ? hwthreads/2 : 1;
 			//TODO: This needs to be configurable for SWnodes
 			std::vector<std::thread> threads;
 			for(std::size_t n=0; n<nthreads; n++){
@@ -416,7 +417,7 @@ class write_buffer
 		 * @brief	Get the time spent flushing the write buffer
 		 * @return	The time in seconds
 		 */
-		double get_flush_time() {
+		double get_flush_time() const {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _flush_time;
 		}
@@ -425,7 +426,7 @@ class write_buffer
 		 * @brief	Get the time spent partially flushing the write buffer
 		 * @return	The time in seconds
 		 */
-		double get_write_back_time() {
+		double get_write_back_time() const {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _write_back_time;
 		}
@@ -434,7 +435,7 @@ class write_buffer
 		 * @brief	Get the time spent waiting for the write buffer lock
 		 * @return	The time in seconds
 		 */
-		double get_buffer_lock_time() {
+		double get_buffer_lock_time() const {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _buffer_lock_time;
 		}
@@ -443,7 +444,7 @@ class write_buffer
 		 * @brief	get buffer size
 		 * @return	the size
 		 */
-		std::size_t get_size() {
+		std::size_t get_size() const {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _buffer.size();
 		}
@@ -452,7 +453,7 @@ class write_buffer
 		 * @brief	get total number of pages added
 		 * @return	number of pages added
 		 */
-		std::size_t get_page_count() {
+		std::size_t get_page_count() const {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _page_count;
 		}
@@ -461,7 +462,7 @@ class write_buffer
 		 * @brief	get the number of times partially flushed
 		 * @return	number of times partially flushed
 		 */
-		std::size_t get_partial_flush_count() {
+		std::size_t get_partial_flush_count() const {
 			std::lock_guard<std::mutex> lock(_buffer_mutex);
 			return _partial_flush_count;
 		}

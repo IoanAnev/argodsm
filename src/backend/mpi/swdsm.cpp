@@ -1018,14 +1018,14 @@ void argo_finalize(){
 	MPI_Barrier(MPI_COMM_WORLD);
 
 	// Free data windows
-	for(auto &win_index : data_windows){
-		for( auto window : win_index){
+	for(auto& win_index : data_windows){
+		for(auto& window : win_index){
 			MPI_Win_free(&window);
 		}
 	}
 	// Free sharer windows
-	for(auto &win_index : sharer_windows){
-		for( auto window : win_index){
+	for(auto& win_index : sharer_windows){
+		for(auto& window : win_index){
 			MPI_Win_free(&window);
 		}
 	}
@@ -1063,7 +1063,7 @@ void self_invalidation(){
 			argo_byte dirty = cacheControl[i].dirty;
 
 			if(flushed == 0 && dirty == DIRTY){
-				for(auto &write_buffer : argo_write_buffer){
+				for(auto& write_buffer : argo_write_buffer){
 					write_buffer.flush();
 				};
 				flushed = 1;
@@ -1109,7 +1109,7 @@ void swdsm_argo_barrier(int n){ //BARRIER
 	if(pthread_mutex_trylock(&barriermutex) == 0){
 		barrierlockholder = pthread_self();
 		pthread_rwlock_wrlock(&sync_lock);
-		for(auto &write_buffer : argo_write_buffer){
+		for(auto& write_buffer : argo_write_buffer){
 			write_buffer.flush();
 		};
 		MPI_Barrier(workcomm);
@@ -1182,7 +1182,7 @@ void argo_release(){
 	double t2 = MPI_Wtime();
 	// Sync lock can only be held by one so no lock_guard required
 	stats.sync_lock_time += t2-t1;
-	for(auto &write_buffer : argo_write_buffer){
+	for(auto& write_buffer : argo_write_buffer){
 		write_buffer.flush();
 	};
 	MPI_Iprobe(MPI_ANY_SOURCE,MPI_ANY_TAG,workcomm,&flag,MPI_STATUS_IGNORE);
@@ -1211,7 +1211,7 @@ void argo_reset_stats(){
 	stats.ssd_time = 0;
 
 	// Clear the cache lock statistics
-	for( auto &cache_lock : cache_locks ){
+	for( auto& cache_lock : cache_locks ){
 		cache_lock.reset_stats();
 	}
 
@@ -1230,7 +1230,7 @@ void argo_reset_stats(){
 	}
 
 	// Clear the write buffer statistics
-	for( auto &write_buffer : argo_write_buffer ) {
+	for( auto& write_buffer : argo_write_buffer ) {
 		write_buffer.reset_stats();
 	}
 }
@@ -1307,7 +1307,7 @@ void print_statistics(){
 	 */
 	double cache_lock_time = 0;
 	std::size_t num_cache_locks = 0;
-	for( auto &cache_lock : cache_locks ) {
+	for( const auto& cache_lock : cache_locks ) {
 		cache_lock_time += cache_lock.get_lock_time();
 		num_cache_locks += cache_lock.get_num_locks();
 	}
@@ -1321,7 +1321,7 @@ void print_statistics(){
 	std::vector<double> page_count, partial_flush_count;
 
 	// Iterate over all buffers
-	for( auto &write_buffer : argo_write_buffer) {
+	for( const auto& write_buffer : argo_write_buffer ) {
 		// Add total times
 		flush_time += write_buffer.get_flush_time();
 		write_back_time += write_buffer.get_write_back_time();
@@ -1344,7 +1344,7 @@ void print_statistics(){
 	// Calculate the standard deviation of the load weights
 	double stddev_page_count = 0;
 	if(max_page_count > 0) {
-		for(auto &e : page_count) {
+		for(auto& e : page_count) {
 			// Normalize to max load
 			e /= max_page_count;
 		}
@@ -1354,7 +1354,7 @@ void print_statistics(){
 	// Calculate the standard deviation of the load weights
 	double stddev_partial_flush_count = 0;
 	if(max_partial_flush_count > 0) {
-		for(auto &e : partial_flush_count) {
+		for(auto& e : partial_flush_count) {
 			// Normalize to max load
 			e /= max_partial_flush_count;
 		}
@@ -1605,7 +1605,7 @@ void add_to_locked(int data_win_index, int homenode){
 
 void unlock_windows() {
 	// Unlock all windows
-	for(const auto &p : locked_windows){
+	for(const auto& p : locked_windows){
 		mpi_lock_data[p.first][p.second].unlock(
 				p.second, data_windows[p.first][p.second]);
 	}
@@ -1625,9 +1625,9 @@ std::size_t get_write_buffer(std::size_t cache_index){
 	return (cache_index + (cache_index / env::write_buffer_count()) + 1) % env::write_buffer_count();
 }
 
-double stddev(const std::vector<double> &v){
-	double sum = std::accumulate(v.begin(), v.end(), 0.0);
-	double mean = sum / v.size();
+double stddev(const std::vector<double>& v){
+	const double sum = std::accumulate(v.begin(), v.end(), 0.0);
+	const double mean = sum / v.size();
 
 	std::vector<double> diff(v.size());
 	std::transform(v.begin(), v.end(), diff.begin(), [mean](double x) { return x - mean; });

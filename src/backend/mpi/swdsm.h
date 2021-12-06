@@ -204,7 +204,7 @@ class alignas(64) cache_lock {
 		 * @brief	Get the time spent waiting for the lock
 		 * @return	The time in seconds
 		 */
-		double get_lock_time(){
+		double get_lock_time() const {
 			return wait_time;
 		}
 
@@ -212,7 +212,7 @@ class alignas(64) cache_lock {
 		 * @brief	Get the time spent holding the lock
 		 * @return	The time in seconds
 		 */
-		double get_hold_time(){
+		double get_hold_time() const {
 			return hold_time;
 		}
 
@@ -220,7 +220,7 @@ class alignas(64) cache_lock {
 		 * @brief	Get the number of times this lock was held
 		 * @return	The number of times this lock was held
 		 */
-		std::size_t get_num_locks(){
+		std::size_t get_num_locks() const {
 			return num_locks;
 		}
 
