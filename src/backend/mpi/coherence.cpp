@@ -105,7 +105,7 @@ namespace argo {
 				if(cacheControl[cache_index].dirty == DIRTY){
 					mprotect((char*)start_address + page_address, block_size, PROT_READ);
 					for(int i = 0; i <CACHELINE; i++){
-						storepageDIFF(cache_index+i,page_address+page_size*i);
+						store_page_diff(cache_index+i,page_address+page_size*i);
 					}
 					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;
@@ -189,7 +189,7 @@ namespace argo {
 				if(cacheControl[cache_index].dirty == DIRTY){
 					mprotect((char*)start_address + page_address, block_size, PROT_READ);
 					for(int i = 0; i <CACHELINE; i++){
-						storepageDIFF(cache_index+i,page_address+page_size*i);
+						store_page_diff(cache_index+i,page_address+page_size*i);
 					}
 					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;

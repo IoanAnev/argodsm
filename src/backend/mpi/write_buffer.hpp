@@ -182,7 +182,7 @@ class write_buffer
 				mprotect(page_ptr, block_size, PROT_READ);
 				cacheControl[cache_index].dirty=CLEAN;
 				for(int i=0; i < CACHELINE; i++){
-					storepageDIFF(cache_index+i,page_size*i+page_address);
+					store_page_diff(cache_index+i,page_size*i+page_address);
 				}
 				// Close any windows used to write back data
 				// This should be replaced with an API call
@@ -225,7 +225,7 @@ class write_buffer
 					mprotect(page_ptr, block_size, PROT_READ);
 					cacheControl[cache_index].dirty=CLEAN;
 					for(int i=0; i < CACHELINE; i++){
-						storepageDIFF(cache_index+i,page_size*i+page_address);
+						store_page_diff(cache_index+i,page_size*i+page_address);
 					}
 					// The windows must be unlocked for concurrency
 					unlock_windows();

@@ -327,7 +327,7 @@ void argo_acq_rel();
  * @param index index in local page cache
  * @param addr address to page in global address space
  */
-void storepageDIFF(unsigned long index, unsigned long addr);
+void store_page_diff(unsigned long index, unsigned long addr);
 
 /*Statistics*/
 /**
