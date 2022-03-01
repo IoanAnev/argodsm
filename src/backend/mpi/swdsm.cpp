@@ -1314,9 +1314,6 @@ void argo_reset_stats(){
 }
 
 void storepageDIFF(unsigned long index, unsigned long addr){
-	unsigned int i,j;
-	int cnt = 0;
-	
 	// This might differ depending on allocation policy, must take into account
 	const argo::node_id_t homenode = get_homenode(addr);
 	const std::size_t offset = get_offset(addr);
@@ -1332,27 +1329,15 @@ void storepageDIFF(unsigned long index, unsigned long addr){
 		add_to_locked(win_index, homenode);
 	}
 
-	for(i = 0; i < pagesize; i+=drf_unit){
-		int branchval;
-		for(j=i; j < i+drf_unit; j++){
-			branchval = real[j] != copy[j];
-			if(branchval != 0){
-				break;
-			}
-		}
-		if(branchval != 0){
-			cnt+=drf_unit;
-		}
-		else{
-			if(cnt > 0){
-				MPI_Put(&real[i-cnt], cnt, MPI_BYTE, homenode, win_offset+(i-cnt), cnt, MPI_BYTE, data_windows[win_index][homenode]);
-				cnt = 0;
-			}
+	char bit_mask[pagesize];
+	for (size_t i = 0; i < pagesize; i += drf_unit) {
+		for (size_t j = i; j < i+drf_unit; ++j) {
+			bit_mask[j] = real[j] ^ copy[j];
 		}
 	}
-	if(cnt > 0){
-		MPI_Put(&real[i-cnt], cnt, MPI_BYTE, homenode, win_offset+(i-cnt), cnt, MPI_BYTE, data_windows[win_index][homenode]);
-	}
+
+	MPI_Accumulate(bit_mask, pagesize, MPI_BYTE, homenode, win_offset, pagesize, MPI_BYTE, MPI_BXOR, data_windows[win_index][homenode]);
+
 	stats.write_misses.fetch_add(1);
 }
 
