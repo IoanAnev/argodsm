@@ -619,7 +619,7 @@ void load_cache_entry(std::uintptr_t aligned_access_offset) {
 			if(cacheControl[idx].dirty == DIRTY){
 				mprotect(old_ptr,block_size,PROT_READ);
 				for(std::size_t j = 0; j < CACHELINE; j++){
-					storepageDIFF(idx+j,pagesize*j+(cacheControl[idx].tag));
+					store_page_diff(idx+j,pagesize*j+(cacheControl[idx].tag));
 				}
 				argo_write_buffer[get_write_buffer(idx)].erase(idx);
 			}
@@ -1237,7 +1237,7 @@ void argo_reset_stats(){
 	}
 }
 
-void storepageDIFF(std::size_t index, std::uintptr_t addr){
+void store_page_diff(std::size_t index, std::uintptr_t addr){
 	// This might differ depending on allocation policy, must take into account
 	const argo::node_id_t homenode = get_homenode(addr);
 	const std::size_t offset = get_offset(addr);
