@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "swdsm.h"
-#include "mpi_lock.hpp"
+#include "mpi_mutex.hpp"
 
 /**
  * @brief MPI communicator for node processes
@@ -28,13 +28,13 @@ extern MPI_Comm workcomm;
  * @see swdsm.h
  * @see swdsm.cpp
  */
-extern std::vector<std::vector<MPI_Win>>  data_windows;
+extern MPI_Win data_window;
 /**
  * @brief locks to protect data windows from unlawful access
  * @see swdsm.h
  * @see swdsm.cpp
  */
-extern mpi_lock **mpi_lock_data;
+extern mpi_mutex **mpi_mutex_data;
 
 /**
  * @brief MPI window for the first-touch data distribution
@@ -213,22 +213,18 @@ namespace argo {
 					std::size_t size, void* output_buffer) {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the exchange operation
-				std::size_t win_index = get_data_win_index(obj.offset());
-				std::size_t win_offset = get_data_win_offset(obj.offset());
 				// TODO: Does this have to be to node 0 like in prev implementation?
-				mpi_lock_data[win_index][obj.node()].lock(MPI_LOCK_EXCLUSIVE, obj.node(), data_windows[win_index][obj.node()]);
-				MPI_Fetch_and_op(desired, output_buffer, t_type, obj.node(), win_offset, MPI_REPLACE, data_windows[win_index][obj.node()]);
-				mpi_lock_data[win_index][obj.node()].unlock(obj.node(), data_windows[win_index][obj.node()]);
+				mpi_mutex_data[obj.node()]->lock();
+				MPI_Fetch_and_op(desired, output_buffer, t_type, obj.node(), obj.offset(), MPI_REPLACE, data_window);
+				mpi_mutex_data[obj.node()]->unlock();
 			}
 
 			void _store(global_ptr<void> obj, void* desired, std::size_t size) {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the store operation
-				std::size_t win_index = get_data_win_index(obj.offset());
-				std::size_t win_offset = get_data_win_offset(obj.offset());
-				mpi_lock_data[win_index][obj.node()].lock(MPI_LOCK_EXCLUSIVE, obj.node(), data_windows[win_index][obj.node()]);
-				MPI_Put(desired, 1, t_type, obj.node(), win_offset, 1, t_type, data_windows[win_index][obj.node()]);
-				mpi_lock_data[win_index][obj.node()].unlock(obj.node(), data_windows[win_index][obj.node()]);
+				mpi_mutex_data[obj.node()]->lock();
+				MPI_Put(desired, 1, t_type, obj.node(), obj.offset(), 1, t_type, data_window);
+				mpi_mutex_data[obj.node()]->unlock();
 			}
 
 			void _store_public_owners_dir(const void* desired,
@@ -261,12 +257,9 @@ namespace argo {
 					void* output_buffer) {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the store operation
-				std::size_t win_index = get_data_win_index(obj.offset());
-				std::size_t win_offset = get_data_win_offset(obj.offset());
-				// TODO: Does this have to be to node 0 like in prev implementation?
-				mpi_lock_data[win_index][obj.node()].lock(MPI_LOCK_SHARED, obj.node(), data_windows[win_index][obj.node()]);
-				MPI_Get(output_buffer, 1, t_type, obj.node(), win_offset, 1, t_type, data_windows[win_index][obj.node()]);
-				mpi_lock_data[win_index][obj.node()].unlock(obj.node(), data_windows[win_index][obj.node()]);
+				mpi_mutex_data[obj.node()]->lock_shared();
+				MPI_Get(output_buffer, 1, t_type, obj.node(), obj.offset(), 1, t_type, data_window);
+				mpi_mutex_data[obj.node()]->unlock_shared();
 			}
 
 			void _load_public_owners_dir(void* output_buffer,
@@ -301,12 +294,9 @@ namespace argo {
 					std::size_t size, void* expected, void* output_buffer) {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the store operation
-				std::size_t win_index = get_data_win_index(obj.offset());
-				std::size_t win_offset = get_data_win_offset(obj.offset());
-				// TODO: Does this have to be to node 0 like in prev implementation?
-				mpi_lock_data[win_index][obj.node()].lock(MPI_LOCK_EXCLUSIVE, obj.node(), data_windows[win_index][obj.node()]);
-				MPI_Compare_and_swap(desired, expected, output_buffer, t_type, obj.node(), win_offset, data_windows[win_index][obj.node()]);
-				mpi_lock_data[win_index][obj.node()].unlock(obj.node(), data_windows[win_index][obj.node()]);
+				mpi_mutex_data[obj.node()]->lock();
+				MPI_Compare_and_swap(desired, expected, output_buffer, t_type, obj.node(), obj.offset(), data_window);
+				mpi_mutex_data[obj.node()]->unlock();
 			}
 
 			void _compare_exchange_owners_dir(const void* desired, const void* expected, void* output_buffer,
@@ -343,12 +333,9 @@ namespace argo {
 			void _fetch_add(global_ptr<void> obj, void* value,
 					MPI_Datatype t_type, void* output_buffer) {
 				// Perform the exchange operation
-				std::size_t win_index = get_data_win_index(obj.offset());
-				std::size_t win_offset = get_data_win_offset(obj.offset());
-				// TODO: Does this have to be to node 0 like in prev implementation?
-				mpi_lock_data[win_index][obj.node()].lock(MPI_LOCK_EXCLUSIVE, obj.node(), data_windows[win_index][obj.node()]);
-				MPI_Fetch_and_op(value, output_buffer, t_type, obj.node(), win_offset, MPI_SUM, data_windows[win_index][obj.node()]);
-				mpi_lock_data[win_index][obj.node()].unlock(obj.node(), data_windows[win_index][obj.node()]);
+				mpi_mutex_data[obj.node()]->lock();
+				MPI_Fetch_and_op(value, output_buffer, t_type, obj.node(), obj.offset(), MPI_SUM, data_window);
+				mpi_mutex_data[obj.node()]->unlock();
 			}
 
 			void _fetch_add_int(global_ptr<void> obj, void* value,

@@ -473,12 +473,10 @@ bool _is_cached(std::uintptr_t addr);
  * op and then unlocks the locked mpi_lock_sharer
  * @param lock_type MPI lock type
  * @param rank remote node to perform op on
- * @param offset the offset in to the remote node's globalSharer
- * data structure
  * @param op A function to execute
  */
-void sharer_op(int lock_type, int rank, int offset,
-		std::function<void(const std::size_t window_index)> op);
+void sharer_op(int lock_type, int rank,
+		std::function<void(MPI_Win* window)> op);
 
 /**
  * @brief Gets the sharer window index based on the classification

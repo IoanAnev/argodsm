@@ -7,7 +7,7 @@
 #include "../backend.hpp"
 #include "swdsm.h"
 #include "write_buffer.hpp"
-#include "mpi_lock.hpp"
+#include "mpi_mutex.hpp"
 #include "virtual_memory/virtual_memory.hpp"
 #include <vector>
 
@@ -18,10 +18,10 @@
  */
 extern control_data *cacheControl;
 /**
- * @brief globalSharers is needed to access and modify the pyxis directory
+ * @brief pyxis_dir is needed to access and modify the pyxis directory
  * @deprecated Should eventually be handled by a cache module
  */
-extern std::uint64_t *globalSharers;
+extern std::uint64_t *pyxis_dir;
 /**
  * @brief A vector containing cache locks
  * @deprecated Should eventually be handled by a cache module
@@ -33,16 +33,10 @@ extern std::vector<cache_lock> cache_locks;
  */
 extern pthread_rwlock_t sync_lock;
 /**
- * @brief sharer_windows protects the pyxis directory
- * @deprecated Should not be needed once the pyxis directory is
- * managed from elsewhere through a cache module.
- */
-extern std::vector<std::vector<MPI_Win>> sharer_windows;
-/**
  * @brief sharer locks that protect concurrent access from the same node
  * @deprecated Should be done in a cache module
  */
-extern mpi_lock **mpi_lock_sharer;
+extern mpi_mutex **mpi_mutex_sharer;
 /**
  * @brief Needed to update argo statistics
  * @deprecated Should be replaced by API calls to a stats module
@@ -113,24 +107,23 @@ namespace argo {
 				// Make sure to sync writebacks
 				unlock_windows();
 
-				std::size_t win_index = get_sharer_win_index(classification_index);
 				// Optimization to keep pages in cache if they do not
 				// need to be invalidated.
-				mpi_lock_sharer[win_index][node_id].lock(MPI_LOCK_SHARED, node_id, sharer_windows[win_index][node_id]);
+				mpi_mutex_sharer[node_id]->lock_shared();
 				if(
 						// node is single writer
-						(globalSharers[classification_index+1] == node_id_bit)
+						(pyxis_dir[classification_index+1] == node_id_bit)
 						||
 						// No writer and assert that the node is a sharer
-						((globalSharers[classification_index+1] == 0) &&
-						 ((globalSharers[classification_index] & node_id_bit) == node_id_bit))
+						((pyxis_dir[classification_index+1] == 0) &&
+						 ((pyxis_dir[classification_index] & node_id_bit) == node_id_bit))
 				  ){
-					mpi_lock_sharer[win_index][node_id].unlock(node_id, sharer_windows[win_index][node_id]);
+					mpi_mutex_sharer[node_id]->unlock_shared();
 					touchedcache[cache_index]=1;
 					//nothing - we keep the pages, SD is done in flushWB
 				}
 				else{ //multiple writer or SO, invalidate the page
-					mpi_lock_sharer[win_index][node_id].unlock(node_id, sharer_windows[win_index][node_id]);
+					mpi_mutex_sharer[node_id]->unlock_shared();
 					cacheControl[cache_index].dirty=CLEAN;
 					cacheControl[cache_index].state = INVALID;
 					touchedcache[cache_index]=0;

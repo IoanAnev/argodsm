@@ -30,6 +30,55 @@ void mpi_lock::lock(int lock_type, int target, MPI_Win window){
 
 	// Take global spinlock
 	double spin_start = MPI_Wtime();
+
+//	while(1) {
+//		// Take exclusive ownership of lock mutex
+//		std::lock_guard<std::mutex> lock_op(lock_mutex);
+//		current_holders = lock_holders;
+//		lock_holders++;
+//
+//		if(!current_holders) {
+//
+//
+//
+//	while(1) {
+//		// Protect lock_holders and m_hop together
+//		// TODO: std::mutex will back off, atomic_flag will busy wait?
+//		while(unlock_flag.test_and_set(std::memory_order_acquire));
+//		// Add self to current lock holders
+//		current_holders = lock_holders.fetch_add(1);
+//		unlock_flag.clear(std::memory_order_release);
+//
+//		// If no one has yet locked MPI, lock it
+//		if(!current_holders) {
+//			// Wait for any unlocks in process to finish
+//			while(m_act);
+//			// Acquire m_act with current lock type
+//			if(!m_act.exchange(lock_type) {
+//				mpi_start = MPI_Wtime();
+//				MPI_Win_lock(lock_type, target, 0, window);
+//				mpi_end = MPI_Wtime();
+//				mpi_acquire_time = mpi_end;
+//
+//				// Store statistics
+//				num_locks_remote++;
+//				m_hop = 1;
+//				break;
+//			} else {
+//				printf("Fatal error during lock.\n");
+//				exit(EXIT_FAILURE);
+//			}
+//		}
+//		// If the MPI lock of the same lock type is already
+//		// held, we exit while loop as local lock holder
+//		else if(m_hop && m_act==lock_type) {
+//			num_locks_local++;
+//			break;
+//		}
+//		// Else, locking failed so resume while loop
+//		else {
+//			unlock(target, window, false)
+
 	pthread_spin_lock(&spin_lock);
 	double spin_end = MPI_Wtime();
 	spin_acquire_time = spin_end;
