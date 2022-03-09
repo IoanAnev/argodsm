@@ -83,10 +83,6 @@ mpi_mutex** mpi_mutex_sharer;
  **/
 mpi_lock** mpi_lock_data; //remove
 mpi_mutex** mpi_mutex_data;
-/**
- * @brief Keep track of locked windows
- */
-thread_local std::vector<std::pair<int, int>> locked_windows;
 /** @brief MPI data structure for sending cache control data*/
 MPI_Datatype mpi_control_data;
 /** @brief MPI data structure for a block containing an ArgoDSM cacheline of pages */
@@ -602,8 +598,6 @@ void load_cache_entry(std::uintptr_t aligned_access_offset) {
 				}
 				argo_write_buffer[get_write_buffer(idx)].erase(idx);
 			}
-			/* Ensure the writeback has finished */
-			unlock_windows();
 
 			/* Clean up cache and protect memory */
 			cacheControl[idx].state = INVALID;
@@ -704,13 +698,10 @@ void load_cache_entry(std::uintptr_t aligned_access_offset) {
 	}
 
 	/* Finally, get the cache data and store it temporarily */
-	std::size_t offset = get_offset(load_offset);
 	char* temp_buf; // This should not be touched
 	mpi_mutex_data[load_node]->lock_shared();
-	//MPI_Get(temp_data.data(), fetch_size, cacheblock,
-	//				load_node, load_offset, fetch_size, cacheblock, data_window);
-	MPI_Get_accumulate(&temp_buf, fetch_size*pagesize*CACHELINE, MPI_BYTE, temp_data.data(),
-					   fetch_size*pagesize*CACHELINE, MPI_BYTE, load_node, offset,
+	MPI_Get_accumulate(temp_buf, fetch_size*pagesize*CACHELINE, MPI_BYTE, temp_data.data(),
+					   fetch_size*pagesize*CACHELINE, MPI_BYTE, load_node, load_offset,
 					   fetch_size*pagesize*CACHELINE, MPI_BYTE, MPI_NO_OP, data_window);
 	mpi_mutex_data[load_node]->unlock_shared();
 	/* Update the cache */
@@ -1185,12 +1176,6 @@ void store_page_diff(std::size_t index, std::uintptr_t addr){
 	char * real = (char *)start_addr+addr;
 	size_t drf_unit = sizeof(char);
 
-	// TODO: 0 should just be removed
-	if(!have_lock(0, homenode)){
-		mpi_mutex_data[homenode]->lock();
-		add_to_locked(0, homenode);
-	}
-
 	char bit_mask[pagesize];
 	for (size_t i = 0; i < pagesize; i += drf_unit) {
 		for (size_t j = i; j < i+drf_unit; ++j) {
@@ -1198,7 +1183,9 @@ void store_page_diff(std::size_t index, std::uintptr_t addr){
 		}
 	}
 
+	mpi_mutex_data[homenode]->lock();
 	MPI_Accumulate(bit_mask, pagesize, MPI_BYTE, homenode, offset, pagesize, MPI_BYTE, MPI_BXOR, data_window);
+	mpi_mutex_data[homenode]->unlock();
 
 	stats.write_misses.fetch_add(1);
 }
@@ -1513,26 +1500,6 @@ void sharer_op(int lock_type, int rank,
 		printf("Fatal error: Wrong MPI lock type.\n");
 		exit(EXIT_FAILURE);
 	}
-}
-
-void add_to_locked(int data_win_index, int homenode){
-	locked_windows.emplace_back(std::make_pair(data_win_index, homenode));
-}
-
-void unlock_windows() {
-	// Unlock all windows
-	for(const auto& p : locked_windows){
-		mpi_mutex_data[p.second]->unlock();
-	}
-	locked_windows.clear();
-}
-
-bool have_lock(int data_win_index, int homenode){
-	auto it = std::find_if(locked_windows.begin(), locked_windows.end(),
-			[&data_win_index, &homenode](const std::pair<int, int>& p) {
-			return (p.first == data_win_index) && (p.second == homenode);
-			});
-	return it != locked_windows.end();
 }
 
 std::size_t get_write_buffer(std::size_t cache_index){

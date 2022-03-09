@@ -104,8 +104,6 @@ namespace argo {
 					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;
 				}
-				// Make sure to sync writebacks
-				unlock_windows();
 
 				// Optimization to keep pages in cache if they do not
 				// need to be invalidated.
@@ -187,8 +185,6 @@ namespace argo {
 					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;
 				}
-				// Make sure to sync writebacks
-				unlock_windows();
 				cache_locks[cache_index].unlock();
 			}
 			double t2 = MPI_Wtime();

@@ -184,9 +184,6 @@ class write_buffer
 				for(int i=0; i < CACHELINE; i++){
 					store_page_diff(cache_index+i,page_size*i+page_address);
 				}
-				// Close any windows used to write back data
-				// This should be replaced with an API call
-				unlock_windows();
 				cache_locks[cache_index].unlock();
 			}
 			double t_stop = MPI_Wtime();
@@ -227,8 +224,6 @@ class write_buffer
 					for(int i=0; i < CACHELINE; i++){
 						store_page_diff(cache_index+i,page_size*i+page_address);
 					}
-					// The windows must be unlocked for concurrency
-					unlock_windows();
 				}
 			}
 		}

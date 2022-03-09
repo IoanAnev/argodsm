@@ -479,60 +479,6 @@ void sharer_op(int lock_type, int rank,
 		std::function<void(MPI_Win* window)> op);
 
 /**
- * @brief Gets the sharer window index based on the classification
- * index
- * @param classification_index the page classification index
- * @return the sharer window index
- */
-std::size_t get_sharer_win_index(int classification_index);
-
-/**
- * @brief Gets the sharer window offset based on the classification
- * index
- * @param classification_index the page classification index
- * @return the offset in to the sharer window
- */
-std::size_t get_sharer_win_offset(int classification_index);
-
-/**
- * @brief Gets the data window index based on the offset into the
- * node's backing store
- * @param offset the page offset in to the remote node's backing
- * store
- * @return the data window index
- */
-std::size_t get_data_win_index(std::size_t offset);
-
-/**
- * @brief Gets the sharer window offset based on the classification
- * index
- * @param offset the page offset in to the remote node's backing
- * store
- * @return the offset in to the sharer window
- */
-std::size_t get_data_win_offset(std::size_t offset);
-
-/**
- * @brief Check if a data window lock is locked by the caller
- * @param data_win_index The index of the data window
- * @param homenode The id of the node to check the lock for
- * @return True if locked by the caller, else false
- */
-bool have_lock(int data_win_index, int homenode);
-
-/**
- * @brief Add a data window index and homenode as locked
- * @param data_win_index The index of the data window
- * @param homenode The id of the node to add the lock for
- */
-void add_to_locked(int data_win_index, int homenode);
-
-/**
- * @brief Unlock all data windows locked by the caller
- */
-void unlock_windows();
-
-/**
  * @brief Calculate the standard deviation for v
  * @param v a vector of doubles by reference
  * @return The standard deviation for all values in v
