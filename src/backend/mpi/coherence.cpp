@@ -7,7 +7,6 @@
 #include "../backend.hpp"
 #include "swdsm.h"
 #include "write_buffer.hpp"
-#include "mpi_mutex.hpp"
 #include "virtual_memory/virtual_memory.hpp"
 #include <vector>
 
@@ -18,11 +17,6 @@
  */
 extern control_data *cacheControl;
 /**
- * @brief pyxis_dir is needed to access and modify the pyxis directory
- * @deprecated Should eventually be handled by a cache module
- */
-extern std::uint64_t *pyxis_dir;
-/**
  * @brief A vector containing cache locks
  * @deprecated Should eventually be handled by a cache module
  */
@@ -32,11 +26,6 @@ extern std::vector<cache_lock> cache_locks;
  * write access to the whole cache.
  */
 extern pthread_rwlock_t sync_lock;
-/**
- * @brief sharer locks that protect concurrent access from the same node
- * @deprecated Should be done in a cache module
- */
-extern mpi_mutex **mpi_mutex_sharer;
 /**
  * @brief Needed to update argo statistics
  * @deprecated Should be replaced by API calls to a stats module
@@ -105,11 +94,19 @@ namespace argo {
 					cacheControl[cache_index].dirty = CLEAN;
 				}
 
+				std::uint64_t sharer, writer;
 				// Get pyxis state of the page
-				mpi_mutex_sharer[node_id]->lock_shared();
-				std::uint64_t sharer = pyxis_dir[classification_index];
-				std::uint64_t writer = pyxis_dir[classification_index+1];
-				mpi_mutex_sharer[node_id]->unlock_shared();
+				sharer_op(MPI_LOCK_SHARED, node_id, [&](MPI_Win* window) {
+					const std::uint64_t* tmp_input_buf; 	// This is empty
+					std::uint64_t tmp_output_buf[2];		// Read value goes here
+					MPI_Get_accumulate(tmp_input_buf, 2, MPI_LONG,
+									   &tmp_output_buf, 2, MPI_LONG,
+									   node_id, classification_index, 2, MPI_LONG,
+									   MPI_NO_OP, *window);
+					sharer = tmp_output_buf[0];
+					writer = tmp_output_buf[1];
+
+				});
 
 				// Optimization to keep pages in cache if they do not
 				// need to be invalidated.
