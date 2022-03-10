@@ -289,18 +289,13 @@ void handler(int sig, siginfo_t *si, void *context){
 							   workrank, classidx, 1, MPI_LONG,
 							   MPI_NO_OP, *window);
 			prevsharer = tmp_output_buf & id;
-			// TODO: This may have to be get_accumulate with MPI_NO_OP
-			//prevsharer = (pyxis_dir[classidx])&id;
 		});
 		if(prevsharer != id){
-			sharer_op(MPI_LOCK_EXCLUSIVE, workrank, [&](MPI_Win* window) {
+			sharer_op(MPI_LOCK_SHARED, workrank, [&](MPI_Win* window) {
 				MPI_Get_accumulate(&id, 1, MPI_LONG,
 								   &sharers, 1, MPI_LONG,
 								   workrank, classidx, 1, MPI_LONG,
 								   MPI_BOR, *window);
-				// TODO: This may have to be get_accumulate with MPI_BOR
-				//sharers = pyxis_dir[classidx];
-				//pyxis_dir[classidx] |= id;
 			});
 			if(sharers != 0 && sharers != id && isPowerOf2(sharers)){
 				std::uint64_t ownid = sharers&invid;
@@ -316,7 +311,7 @@ void handler(int sig, siginfo_t *si, void *context){
 				}
 				else{
 					/* update remote private holder to shared */
-					sharer_op(MPI_LOCK_EXCLUSIVE, owner, [&](MPI_Win* window){
+					sharer_op(MPI_LOCK_SHARED, owner, [&](MPI_Win* window){
 						MPI_Accumulate(&id, 1, MPI_LONG, owner, classidx,
 									   1, MPI_LONG, MPI_BOR, *window);
 					});
@@ -337,7 +332,7 @@ void handler(int sig, siginfo_t *si, void *context){
 
 			/* get current sharers/writers and then add your own id */
 			std::uint64_t sharers, writers;
-			sharer_op(MPI_LOCK_EXCLUSIVE, workrank, [&](MPI_Win* window){
+			sharer_op(MPI_LOCK_SHARED, workrank, [&](MPI_Win* window){
 				const std::uint64_t tmp_input_buf[2] = {0, id};
 				std::uint64_t tmp_output_buf[2];		// Read value goes here
 				MPI_Get_accumulate(&tmp_input_buf, 2, MPI_LONG,
@@ -346,10 +341,6 @@ void handler(int sig, siginfo_t *si, void *context){
 								   MPI_BOR, *window);
 				sharers = tmp_output_buf[0];
 				writers = tmp_output_buf[1];
-				// This may have to be a get_accumulate with MPI_BOR
-				//sharers = pyxis_dir[classidx];
-				//writers = pyxis_dir[classidx+1];
-				//pyxis_dir[classidx+1] |= id;
 			});
 
 			/* remote single writer */
@@ -360,7 +351,7 @@ void handler(int sig, siginfo_t *si, void *context){
 						break;
 					}
 				}
-				sharer_op(MPI_LOCK_EXCLUSIVE, owner, [&](MPI_Win* window){
+				sharer_op(MPI_LOCK_SHARED, owner, [&](MPI_Win* window){
 					MPI_Accumulate(&id, 1, MPI_LONG, owner, classidx+1,
 								   1, MPI_LONG, MPI_BOR, *window);
 				});
@@ -368,7 +359,7 @@ void handler(int sig, siginfo_t *si, void *context){
 			else if(writers == id || writers == 0){
 				for(argo::node_id_t n = 0; n < numtasks; n++){
 					if(n != workrank && ((static_cast<std::uint64_t>(1)<<n)&sharers) != 0){
-						sharer_op(MPI_LOCK_EXCLUSIVE, n, [&](MPI_Win* window){
+						sharer_op(MPI_LOCK_SHARED, n, [&](MPI_Win* window){
 							MPI_Accumulate(&id, 1, MPI_LONG, n, classidx+1,
 										   1, MPI_LONG, MPI_BOR, *window);
 						});
@@ -433,19 +424,14 @@ void handler(int sig, siginfo_t *si, void *context){
 						   MPI_NO_OP, *window);
 		sharers = tmp_output_buf[0];
 		writers = tmp_output_buf[1];
-		// This may have to be an MPI_Get_accumulate with MPI_NO_OP
-		//writers = pyxis_dir[classidx+1];
-		//sharers = pyxis_dir[classidx];
 	});
 
 	/* Either already registered write - or 1 or 0 other writers already cached */
 	if(writers != id && isPowerOf2(writers)){
-		sharer_op(MPI_LOCK_EXCLUSIVE, workrank, [&](MPI_Win* window){
+		sharer_op(MPI_LOCK_SHARED, workrank, [&](MPI_Win* window){
 			MPI_Accumulate(&id, 1, MPI_LONG,
 						   workrank, classidx+1, 1, MPI_LONG,
 						   MPI_BOR, *window);
-			// This may have to be an MPI_Accumulate with MPI_BOR
-			// pyxis_dir[classidx+1] |= id; //register locally
 		});
 
 		/* register and get latest sharers / writers */
@@ -465,12 +451,10 @@ void handler(int sig, siginfo_t *si, void *context){
 		/* We get result of accumulation before operation so we need to account for that */
 		writers |= id;
 		/* Just add the (potentially) new sharers fetched to local copy */
-		sharer_op(MPI_LOCK_EXCLUSIVE, workrank, [&](MPI_Win* window){
+		sharer_op(MPI_LOCK_SHARED, workrank, [&](MPI_Win* window){
 			MPI_Accumulate(&sharers, 1, MPI_LONG,
 						   workrank, classidx, 1, MPI_LONG,
 						   MPI_BOR, *window);
-			// This may have to be MPI_Accumulate with MPI_BOR
-			// pyxis_dir[classidx] |= sharers;
 		});
 
 		/* check if we need to update */
@@ -481,7 +465,7 @@ void handler(int sig, siginfo_t *si, void *context){
 					break;
 				}
 			}
-			sharer_op(MPI_LOCK_EXCLUSIVE, owner, [&](MPI_Win* window){
+			sharer_op(MPI_LOCK_SHARED, owner, [&](MPI_Win* window){
 				MPI_Accumulate(&id, 1, MPI_LONG, owner, classidx+1,
 							   1, MPI_LONG, MPI_BOR, *window);
 			});
@@ -489,7 +473,7 @@ void handler(int sig, siginfo_t *si, void *context){
 		else if(writers==id || writers==0){
 			for(argo::node_id_t n = 0; n < numtasks; n++){
 				if(n != workrank && ((static_cast<unsigned long>(1)<<n)&sharers) != 0){
-					sharer_op(MPI_LOCK_EXCLUSIVE, n, [&](MPI_Win* window){
+					sharer_op(MPI_LOCK_SHARED, n, [&](MPI_Win* window){
 						MPI_Accumulate(&id, 1, MPI_LONG, n, classidx+1,
 									   1, MPI_LONG, MPI_BOR, *window);
 					});
@@ -672,8 +656,6 @@ void load_cache_entry(std::uintptr_t aligned_access_offset) {
 			if(pages_to_load[i]){
 				/* Check local pyxis directory if we are sharer of the page */
 				local_sharers[i] = tmp_output_buf[i*2] & node_id_bit;
-				// May have to be an MPI_Get_accumulate with MPI_NO_OP
-				//local_sharers[i] = (pyxis_dir[classification_index_array[i]])&node_id_bit;
 				if(local_sharers[i] == 0){
 					sharer_bit_mask[i*2] = node_id_bit;
 					new_sharer = true; //At least one new sharer detected
@@ -697,13 +679,18 @@ void load_cache_entry(std::uintptr_t aligned_access_offset) {
 	}
 
 	/* Register the received remote pyxis_dir information locally */
-	sharer_op(MPI_LOCK_EXCLUSIVE, workrank, [&](MPI_Win* window){
+	sharer_op(MPI_LOCK_SHARED, workrank, [&](MPI_Win* window){
 		for(std::size_t i = 0; i < fetch_size; i+=CACHELINE){
 			if(pages_to_load[i]){
+				const std::uint64_t tmp_input_buf[2] =
+					{remote_sharers[i*2] & node_id_bit, remote_sharers[(i*2)+1]};
+				MPI_Accumulate(&tmp_input_buf, 2, MPI_LONG,
+							   workrank, classification_index_array[i], 2, MPI_LONG,
+							   MPI_BOR, *window);
 				// This may have to be an MPI_Accumulate with MPI_BOR on 2 elements
-				pyxis_dir[classification_index_array[i]] |= remote_sharers[i*2];
-				pyxis_dir[classification_index_array[i]] |= node_id_bit; //Also add self
-				pyxis_dir[classification_index_array[i]+1] |= remote_sharers[(i*2)+1];
+				//pyxis_dir[classification_index_array[i]] |= remote_sharers[i*2];
+				//pyxis_dir[classification_index_array[i]] |= node_id_bit; //Also add self
+				//pyxis_dir[classification_index_array[i]+1] |= remote_sharers[(i*2)+1];
 			}
 		}
 	});
@@ -740,7 +727,7 @@ void load_cache_entry(std::uintptr_t aligned_access_offset) {
 				}
 
 				/* Downgrade all relevant pages on the owner node from private to shared */
-				sharer_op(MPI_LOCK_EXCLUSIVE, owner, [&](MPI_Win* window){
+				sharer_op(MPI_LOCK_SHARED, owner, [&](MPI_Win* window){
 					MPI_Accumulate(sharer_bit_mask.data(), classification_size, MPI_LONG,
 								   owner, classification_index_array[0], classification_size,
 								   MPI_LONG, MPI_BOR, *window);
@@ -1132,10 +1119,12 @@ void argo_reset_coherence(int n){
 	stats.write_misses.store(0);
 	memset(touchedcache, 0, cachesize);
 
-	sharer_op(MPI_LOCK_EXCLUSIVE, workrank, [&](MPI_Win* window){
-		for(std::size_t i = 0; i < pyxis_size; i++){
-			// This can probably stay as exclusive since it's during init/reset
-			pyxis_dir[i] = 0;
+	sharer_op(MPI_LOCK_SHARED, workrank, [&](MPI_Win* window){
+		const std::uint64_t tmp_buf_in[2] = {0, 0};
+		for(std::size_t i = 0; i < pyxis_size; i+=2){
+			MPI_Accumulate(&tmp_buf_in, 2, MPI_LONG,
+						   workrank, i, 2, MPI_LONG,
+						   MPI_BOR, *window);
 		}
 	});
 	
