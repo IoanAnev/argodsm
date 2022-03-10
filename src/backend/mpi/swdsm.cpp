@@ -1002,41 +1002,46 @@ void argo_finalize(){
 
 void self_invalidation(){
 	int flushed = 0;
-	std::uint64_t id = static_cast<std::uint64_t>(1) << getID();
+	std::uint64_t node_id_bit = static_cast<std::uint64_t>(1) << getID();
 
 	double t1 = MPI_Wtime();
-	for(std::size_t i = 0; i < cachesize; i+=CACHELINE){
-		if(touchedcache[i] != 0){
-			std::uintptr_t distrAddr = cacheControl[i].tag;
-			std::uintptr_t lineAddr = distrAddr/(CACHELINE*pagesize);
-			lineAddr*=(pagesize*CACHELINE);
-			std::size_t classidx = get_classification_index(lineAddr);
-			argo_byte dirty = cacheControl[i].dirty;
+	// Iterate over all cache indices
+	for(std::size_t cache_index = 0; cache_index < cachesize; cache_index+=CACHELINE){
+		// Only consider touched cache indices
+		if(touchedcache[cache_index] != 0){
+			const std::uintptr_t addr = align_backwards(
+				cacheControl[cache_index].tag, CACHELINE*pagesize);
+			std::size_t classification_index = get_classification_index(addr);
+			argo_byte dirty = cacheControl[cache_index].dirty;
 
+			// Flush the write buffer once if a dirty page is found
 			if(flushed == 0 && dirty == DIRTY){
 				for(auto& write_buffer : argo_write_buffer){
 					write_buffer.flush();
 				};
 				flushed = 1;
 			}
+
+			// Get pyxis state of the page
 			mpi_mutex_sharer[workrank]->lock_shared();
-			if(
-				 // node is single writer
-				 (pyxis_dir[classidx+1]==id)
-				 ||
-				 // No writer and assert that the node is a sharer
-				 ((pyxis_dir[classidx+1]==0) && ((pyxis_dir[classidx]&id)==id))
-				 ){
-				mpi_mutex_sharer[workrank]->unlock_shared();
-				touchedcache[i] =1;
+			std::uint64_t sharer = pyxis_dir[classification_index];
+			std::uint64_t writer = pyxis_dir[classification_index+1];
+			mpi_mutex_sharer[workrank]->unlock_shared();
+
+			// Optimization to keep pages in cache if they do not
+			// need to be invalidated.
+			if( // node is single writer
+				(writer == node_id_bit) ||
+				// No writer and assert that the node is a sharer
+				((writer == 0) && ((sharer & node_id_bit) == node_id_bit))
+			  ){
 				/*nothing - we keep the pages, SD is done in flushWB*/
 			}
-			else{ //multiple writer or SO
-				mpi_mutex_sharer[workrank]->unlock_shared();
-				cacheControl[i].dirty=CLEAN;
-				cacheControl[i].state = INVALID;
-				touchedcache[i] =0;
-				mprotect((char*)start_addr + lineAddr, pagesize*CACHELINE, PROT_NONE);
+			else{ //multiple writer or SO, invalidate the page
+				cacheControl[cache_index].dirty = CLEAN;
+				cacheControl[cache_index].state = INVALID;
+				touchedcache[cache_index] = 0;
+				mprotect((char*)start_addr + addr, pagesize*CACHELINE, PROT_NONE);
 			}
 		}
 	}

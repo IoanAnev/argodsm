@@ -98,33 +98,33 @@ namespace argo {
 				// If the page is dirty, downgrade it
 				if(cacheControl[cache_index].dirty == DIRTY){
 					mprotect((char*)start_address + page_address, block_size, PROT_READ);
-					for(int i = 0; i <CACHELINE; i++){
+					for(int i = 0; i < CACHELINE; i++){
 						store_page_diff(cache_index+i,page_address+page_size*i);
 					}
 					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
 					cacheControl[cache_index].dirty = CLEAN;
 				}
 
+				// Get pyxis state of the page
+				mpi_mutex_sharer[node_id]->lock_shared();
+				std::uint64_t sharer = pyxis_dir[classification_index];
+				std::uint64_t writer = pyxis_dir[classification_index+1];
+				mpi_mutex_sharer[node_id]->unlock_shared();
+
 				// Optimization to keep pages in cache if they do not
 				// need to be invalidated.
-				mpi_mutex_sharer[node_id]->lock_shared();
-				if(
-						// node is single writer
-						(pyxis_dir[classification_index+1] == node_id_bit)
-						||
-						// No writer and assert that the node is a sharer
-						((pyxis_dir[classification_index+1] == 0) &&
-						 ((pyxis_dir[classification_index] & node_id_bit) == node_id_bit))
+				if( // node is single writer
+					(writer == node_id_bit) ||
+					// No writer and assert that the node is a sharer
+					((writer == 0) && ((sharer & node_id_bit) == node_id_bit))
 				  ){
-					mpi_mutex_sharer[node_id]->unlock_shared();
-					touchedcache[cache_index]=1;
+					touchedcache[cache_index] = 1; // Touched state not checked
 					//nothing - we keep the pages, SD is done in flushWB
 				}
 				else{ //multiple writer or SO, invalidate the page
-					mpi_mutex_sharer[node_id]->unlock_shared();
-					cacheControl[cache_index].dirty=CLEAN;
+					cacheControl[cache_index].dirty = CLEAN;
 					cacheControl[cache_index].state = INVALID;
-					touchedcache[cache_index]=0;
+					touchedcache[cache_index] = 0;
 					mprotect((char*)start_address + page_address, block_size, PROT_NONE);
 				}
 				cache_locks[cache_index].unlock();
@@ -179,7 +179,7 @@ namespace argo {
 				// If the page is dirty, downgrade it
 				if(cacheControl[cache_index].dirty == DIRTY){
 					mprotect((char*)start_address + page_address, block_size, PROT_READ);
-					for(int i = 0; i <CACHELINE; i++){
+					for(int i = 0; i < CACHELINE; i++){
 						store_page_diff(cache_index+i,page_address+page_size*i);
 					}
 					argo_write_buffer[get_write_buffer(cache_index)].erase(cache_index);
