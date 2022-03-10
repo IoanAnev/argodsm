@@ -69,10 +69,10 @@ MPI_Group startgroup;
 MPI_Group workgroup;
 /** @brief Communicator can be replaced with MPI_COMM_WORLD*/
 MPI_Comm workcomm;
-/** @brief MPI window for communicating pyxis directory*/
-MPI_Win sharer_window;
+/** @brief MPI windows for communicating pyxis directory*/
+MPI_Win* sharer_window;
 /** @brief MPI windows for reading and writing data in global address space */
-MPI_Win data_window;
+MPI_Win* data_window;
 /**
  * @brief Mutex to protect concurrent access to same window from within node
  **/
@@ -712,7 +712,7 @@ void load_cache_entry(std::uintptr_t aligned_access_offset) {
 	mpi_mutex_data[load_node]->lock_shared();
 	MPI_Get_accumulate(temp_buf, fetch_size*pagesize*CACHELINE, MPI_BYTE, temp_data.data(),
 					   fetch_size*pagesize*CACHELINE, MPI_BYTE, load_node, load_offset,
-					   fetch_size*pagesize*CACHELINE, MPI_BYTE, MPI_NO_OP, data_window);
+					   fetch_size*pagesize*CACHELINE, MPI_BYTE, MPI_NO_OP, data_window[load_node]);
 	mpi_mutex_data[load_node]->unlock_shared();
 	/* Update the cache */
 	for(std::size_t idx = start_index, p = 0; idx < end_index; idx+=CACHELINE, p+=CACHELINE){
@@ -913,23 +913,25 @@ void argo_initialize(std::size_t argo_size, std::size_t cache_size){
 	argo_write_buffer.resize(env::write_buffer_count());
 
 	// Create an MPI Window and a window lock for the global data
-	MPI_Win_create(global_data, size_of_chunk*sizeof(argo_byte), 1,
-				   MPI_INFO_NULL, MPI_COMM_WORLD, &data_window);
+	data_window = new MPI_Win[numtasks];
 	mpi_mutex_data = new mpi_mutex*[numtasks];
 	mpi_lock_data = new mpi_lock*[numtasks]; //remove
 	for(std::size_t n = 0; n < numtasks; n++) {
+		MPI_Win_create(global_data, size_of_chunk*sizeof(argo_byte), 1,
+					   MPI_INFO_NULL, MPI_COMM_WORLD, &data_window[n]);
 		mpi_lock_data[n] = new mpi_lock(); //remove
-		mpi_mutex_data[n] = new mpi_mutex(n, &data_window);
+		mpi_mutex_data[n] = new mpi_mutex(n, &data_window[n]);
 	}
 
 	// Create an MPI Window and a window lock for the pyxis directory
-	MPI_Win_create(pyxis_dir, gwritersize, sizeof(std::uint64_t),
-				   MPI_INFO_NULL, MPI_COMM_WORLD, &sharer_window);
+	sharer_window = new MPI_Win[numtasks];
 	mpi_mutex_sharer = new mpi_mutex*[numtasks];
 	mpi_lock_sharer = new mpi_lock*[numtasks]; //remove
 	for(std::size_t n = 0; n < numtasks; n++) {
+		MPI_Win_create(pyxis_dir, gwritersize, sizeof(std::uint64_t),
+					   MPI_INFO_NULL, MPI_COMM_WORLD, &sharer_window[n]);
 		mpi_lock_sharer[n] = new mpi_lock(); //remove
-		mpi_mutex_sharer[n] = new mpi_mutex(n, &sharer_window);
+		mpi_mutex_sharer[n] = new mpi_mutex(n, &sharer_window[n]);
 	}
 
 	if (dd::is_first_touch_policy()) {
@@ -979,17 +981,19 @@ void argo_finalize(){
 	for(argo::node_id_t n = 0; n < numtasks; n++) {
 		delete mpi_lock_data[n]; // remove
 		delete mpi_mutex_data[n];
+		MPI_Win_free(&data_window[n]);
 		delete mpi_lock_sharer[n]; // remove
 		delete mpi_mutex_sharer[n];
+		MPI_Win_free(&sharer_window[n]);
 	}
 	delete[] mpi_mutex_data;
 	delete[] mpi_mutex_sharer;
 	delete[] mpi_lock_data; // remove
 	delete[] mpi_lock_sharer; // remove
+	delete[] data_window;
+	delete[] sharer_window;
 	
 	// Free MPI windows
-	MPI_Win_free(&data_window);
-	MPI_Win_free(&sharer_window);
 	if (dd::is_first_touch_policy()) {
 		MPI_Win_free(&owners_dir_window);
 		MPI_Win_free(&offsets_tbl_window);
@@ -1200,7 +1204,8 @@ void store_page_diff(std::size_t index, std::uintptr_t addr){
 	}
 
 	mpi_mutex_data[homenode]->lock_shared();
-	MPI_Accumulate(bit_mask, pagesize, MPI_BYTE, homenode, offset, pagesize, MPI_BYTE, MPI_BXOR, data_window);
+	MPI_Accumulate(bit_mask, pagesize, MPI_BYTE, homenode, offset,
+				   pagesize, MPI_BYTE, MPI_BXOR, data_window[homenode]);
 	mpi_mutex_data[homenode]->unlock_shared();
 
 	stats.write_misses.fetch_add(1);
@@ -1504,12 +1509,12 @@ void sharer_op(int lock_type, int rank,
 	// Shared locks
 	if (lock_type == MPI_LOCK_SHARED) {
 		mpi_mutex_sharer[rank]->lock_shared();
-		op(&sharer_window);
+		op(&sharer_window[rank]);
 		mpi_mutex_sharer[rank]->unlock_shared();
 	} // Exclusive locks
 	else if(lock_type == MPI_LOCK_EXCLUSIVE) {
 		mpi_mutex_sharer[rank]->lock();
-		op(&sharer_window);
+		op(&sharer_window[rank]);
 		mpi_mutex_sharer[rank]->unlock();
 	} // Error
 	else {

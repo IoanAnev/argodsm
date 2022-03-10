@@ -28,7 +28,7 @@ extern MPI_Comm workcomm;
  * @see swdsm.h
  * @see swdsm.cpp
  */
-extern MPI_Win data_window;
+extern MPI_Win* data_window;
 /**
  * @brief locks to protect data windows from unlawful access
  * @see swdsm.h
@@ -215,7 +215,7 @@ namespace argo {
 				// Perform the exchange operation
 				// TODO: Does this have to be to node 0 like in prev implementation?
 				mpi_mutex_data[obj.node()]->lock();
-				MPI_Fetch_and_op(desired, output_buffer, t_type, obj.node(), obj.offset(), MPI_REPLACE, data_window);
+				MPI_Fetch_and_op(desired, output_buffer, t_type, obj.node(), obj.offset(), MPI_REPLACE, data_window[obj.node()]);
 				mpi_mutex_data[obj.node()]->unlock();
 			}
 
@@ -223,7 +223,7 @@ namespace argo {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the store operation
 				mpi_mutex_data[obj.node()]->lock();
-				MPI_Put(desired, 1, t_type, obj.node(), obj.offset(), 1, t_type, data_window);
+				MPI_Put(desired, 1, t_type, obj.node(), obj.offset(), 1, t_type, data_window[obj.node()]);
 				mpi_mutex_data[obj.node()]->unlock();
 			}
 
@@ -258,7 +258,7 @@ namespace argo {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the store operation
 				mpi_mutex_data[obj.node()]->lock_shared();
-				MPI_Get(output_buffer, 1, t_type, obj.node(), obj.offset(), 1, t_type, data_window);
+				MPI_Get(output_buffer, 1, t_type, obj.node(), obj.offset(), 1, t_type, data_window[obj.node()]);
 				mpi_mutex_data[obj.node()]->unlock_shared();
 			}
 
@@ -295,7 +295,7 @@ namespace argo {
 				MPI_Datatype t_type = fitting_mpi_int(size);
 				// Perform the store operation
 				mpi_mutex_data[obj.node()]->lock();
-				MPI_Compare_and_swap(desired, expected, output_buffer, t_type, obj.node(), obj.offset(), data_window);
+				MPI_Compare_and_swap(desired, expected, output_buffer, t_type, obj.node(), obj.offset(), data_window[obj.node()]);
 				mpi_mutex_data[obj.node()]->unlock();
 			}
 
@@ -334,7 +334,7 @@ namespace argo {
 					MPI_Datatype t_type, void* output_buffer) {
 				// Perform the exchange operation
 				mpi_mutex_data[obj.node()]->lock();
-				MPI_Fetch_and_op(value, output_buffer, t_type, obj.node(), obj.offset(), MPI_SUM, data_window);
+				MPI_Fetch_and_op(value, output_buffer, t_type, obj.node(), obj.offset(), MPI_SUM, data_window[obj.node()]);
 				mpi_mutex_data[obj.node()]->unlock();
 			}
 
