@@ -526,7 +526,7 @@ void handler(int sig, siginfo_t *si, void *context){
 	pthread_mutex_lock(&cachemutex);
 
 	/* page is local */
-	if(homenode == (getID())){
+	if(false){
 		sem_wait(&ibsem);
 		std::uint64_t sharers;
 		MPI_Win_lock(MPI_LOCK_SHARED, workrank, 0, sharerWindow);
@@ -1135,40 +1135,21 @@ void clearStatistics(){
 }
 
 void storepageDIFF(std::size_t index, std::uintptr_t addr){
-	int cnt = 0;
 	const argo::node_id_t homenode = get_homenode(addr);
 	const std::size_t offset = get_offset(addr);
 
 	char * copy = (char *)(pagecopy + index*pagesize);
 	char * real = (char *)startAddr+addr;
-	size_t drf_unit = sizeof(char);
+
+	char bit_mask[pagesize];
+	for (std::size_t i = 0; i < pagesize; ++i) {
+		bit_mask[i] = real[i] ^ copy[i];
+	}
 
 	MPI_Win_lock(MPI_LOCK_EXCLUSIVE, homenode, 0, globalDataWindow[homenode]);
-
-	std::size_t i;
-	for(i = 0; i < pagesize; i+=drf_unit){
-		int branchval;
-		for(std::size_t j = i; j < i+drf_unit; j++){
-			branchval = real[j] != copy[j];
-			if(branchval != 0){
-				break;
-			}
-		}
-		if(branchval != 0){
-			cnt+=drf_unit;
-		}
-		else{
-			if(cnt > 0){
-				MPI_Put(&real[i-cnt], cnt, MPI_BYTE, homenode, offset+(i-cnt), cnt, MPI_BYTE, globalDataWindow[homenode]);
-				cnt = 0;
-			}
-		}
-	}
-	if(cnt > 0){
-		MPI_Put(&real[i-cnt], cnt, MPI_BYTE, homenode, offset+(i-cnt), cnt, MPI_BYTE, globalDataWindow[homenode]);
-	}
-
+	MPI_Accumulate(bit_mask, pagesize, MPI_BYTE, homenode, offset, pagesize, MPI_BYTE, MPI_BXOR, globalDataWindow[homenode]);
 	MPI_Win_unlock(homenode, globalDataWindow[homenode]);
+
 	stats.stores++;
 }
 
