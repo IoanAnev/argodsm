@@ -131,9 +131,9 @@ class write_buffer
 		 * @brief	Removes the front element from the buffer and returns it
 		 * @return	The element that was popped from the buffer
 		 */
-		T pop() {
+		_buffer_pair pop() {
 			auto node_handle = _buffer.extract(_buffer.begin());
-			T elem = std::move(node_handle.value().first);
+			_buffer_pair elem = std::move(node_handle.value());
 			return elem;
 		}
 
@@ -142,18 +142,21 @@ class write_buffer
 		 * @param	cache_index the cache index to write back from
 		 * @pre		Require ibsem and cachemutex to be taken
 		 */
-		void write_back_index(std::size_t cache_index) {
-			assert(cacheControl[cache_index].dirty == DIRTY);
-			std::uintptr_t page_address = cacheControl[cache_index].tag;
+		void write_back_indices(std::size_t start_index, std::size_t size) {
+			for (std::size_t i = start_index; i < start_index+size; ++i) {
+				assert(cacheControl[i].dirty == DIRTY);
+			}
+
+			std::uintptr_t page_address = cacheControl[start_index].tag;
 			void* page_ptr = static_cast<char*>(
 				argo::virtual_memory::start_address()) + page_address;
 
 			// Write back the page
-			mprotect(page_ptr, block_size, PROT_READ);
-			cacheControl[cache_index].dirty = CLEAN;
-			for(std::size_t i = 0; i < CACHELINE; i++){
-				storepageDIFF(cache_index+i, page_size*i+page_address);
+			mprotect(page_ptr, block_size*size, PROT_READ);
+			for (std::size_t i = start_index; i < start_index+size; ++i) {
+				cacheControl[i].dirty = CLEAN;
 			}
+			storepageDIFF(start_index, page_address, size);
 		}
 
 		/**
@@ -164,9 +167,34 @@ class write_buffer
 		void flush_partial() {
 			double t_start = MPI_Wtime();
 
+			// Lambda to check if it's feasible to group these pages together
+			auto are_indices_adjacent =
+				[](const _buffer_pair& l, const _buffer_pair& r) {
+					return (l.second == r.second &&
+					        l.first  == r.first - 1) ? true : false;
+				};
+
 			// For each element, write back the corresponding ArgoDSM page
-			for(std::size_t i = 0; i < _write_back_size; i++) {
-				write_back_index(pop());
+			std::size_t write_back_size = _write_back_size;
+
+			while (write_back_size) {
+				auto l = _buffer.begin();
+				T lidx = l->first;
+				auto r = std::next(l);
+
+				std::size_t c;
+				for (c = 1; c < write_back_size; ++c, ++l, ++r) {
+					if (!are_indices_adjacent(*l, *r)) {
+						break;
+					}
+				}
+				// erase set of pairs
+				for (std::size_t n = 0; n < c; ++n) {
+					pop();
+				}
+
+				write_back_indices(lidx, c);
+				write_back_size -= c;
 			}
 			double t_end = MPI_Wtime();
 
@@ -251,9 +279,34 @@ class write_buffer
 		void _flush(std::atomic<bool>* w_flag) {
 			double t_start = MPI_Wtime();
 
-			// Write back pagediffs until the buffer is empty
-			while(!empty()) {
-				write_back_index(pop());
+			// Lambda to check if it's feasible to group these pages together
+			auto are_indices_adjacent =
+				[](const _buffer_pair& l, const _buffer_pair& r) {
+					return (l.second == r.second &&
+					        l.first  == r.first - 1) ? true : false;
+				};
+
+			// For each element, write back the corresponding ArgoDSM page
+			std::size_t buffer_size = _buffer.size();
+
+			while (buffer_size) {
+				auto l = _buffer.begin();
+				T lidx = l->first;
+				auto r = std::next(l);
+
+				std::size_t c;
+				for (c = 1; c < buffer_size; ++c, ++l, ++r) {
+					if (!are_indices_adjacent(*l, *r)) {
+						break;
+					}
+				}
+				// erase set of pairs
+				for (std::size_t n = 0; n < c; ++n) {
+					pop();
+				}
+
+				write_back_indices(lidx, c);
+				buffer_size -= c;
 			}
 			double t_stop = MPI_Wtime();
 

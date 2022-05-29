@@ -193,7 +193,7 @@ void argo_acq_rel();
  * @param index index in local page cache
  * @param addr address to page in global address space
  */
-void storepageDIFF(std::size_t index, std::uintptr_t addr);
+void storepageDIFF(std::size_t index, std::uintptr_t addr, std::size_t size = 1);
 
 /*Statistics*/
 /**

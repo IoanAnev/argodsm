@@ -1134,20 +1134,20 @@ void clearStatistics(){
 	stats.ssdtime = 0;
 }
 
-void storepageDIFF(std::size_t index, std::uintptr_t addr){
+void storepageDIFF(std::size_t index, std::uintptr_t addr, std::size_t size){
 	const argo::node_id_t homenode = get_homenode(addr);
 	const std::size_t offset = get_offset(addr);
 
 	char * copy = (char *)(pagecopy + index*pagesize);
 	char * real = (char *)startAddr+addr;
 
-	char bit_mask[pagesize];
-	for (std::size_t i = 0; i < pagesize; ++i) {
+	char bit_mask[pagesize*size];
+	for (std::size_t i = 0; i < pagesize*size; ++i) {
 		bit_mask[i] = real[i] ^ copy[i];
 	}
 
 	MPI_Win_lock(MPI_LOCK_EXCLUSIVE, homenode, 0, globalDataWindow[homenode]);
-	MPI_Accumulate(bit_mask, pagesize, MPI_BYTE, homenode, offset, pagesize, MPI_BYTE, MPI_BXOR, globalDataWindow[homenode]);
+	MPI_Accumulate(bit_mask, pagesize*size, MPI_BYTE, homenode, offset, pagesize*size, MPI_BYTE, MPI_BXOR, globalDataWindow[homenode]);
 	MPI_Win_unlock(homenode, globalDataWindow[homenode]);
 
 	stats.stores++;
