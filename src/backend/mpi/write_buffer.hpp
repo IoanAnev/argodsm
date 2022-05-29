@@ -44,17 +44,17 @@ template<typename T>
 class write_buffer
 {
 	private:
+		using _buffer_pair = std::pair<T, argo::node_id_t>;
+		
 		/**
 		 * @brief Key comparison function to sort elements by home node
 		 *        id and cache index in ascending order
 		 */
-		static bool key_cmp(const T& l, const T& r) {
-			const auto l_home = get_homenode(cacheControl[l].tag);
-			const auto r_home = get_homenode(cacheControl[r].tag);
-
-			return l_home == r_home
-			     ? l < r
-			     : l_home  < r_home;
+		static bool key_cmp(const _buffer_pair& l,
+		                    const _buffer_pair& r) {
+			return l.second == r.second
+			     ? l.first   < r.first
+			     : l.second  < r.second;
 		}
 
 		/** 
@@ -62,7 +62,7 @@ class write_buffer
 		 *        should be written back
 		 * @note  Elements in the container are unique
 		 */
-		std::set<T, decltype(key_cmp)*> _buffer{key_cmp};
+		std::set<_buffer_pair, decltype(key_cmp)*> _buffer{key_cmp};
 
 		/** @brief The maximum size of the write buffer */
 		std::size_t _max_size;
@@ -114,7 +114,7 @@ class write_buffer
 		 * @param	val The value to check for
 		 * @return	True if val exists in the buffer, else False
 		 */
-		bool has(const T& val) const {
+		bool has(const _buffer_pair& val) const {
 			return (_buffer.find(val) != _buffer.cend());
 		}
 
@@ -133,7 +133,7 @@ class write_buffer
 		 */
 		T pop() {
 			auto node_handle = _buffer.extract(_buffer.begin());
-			T elem = std::move(node_handle.value());
+			T elem = std::move(node_handle.value().first);
 			return elem;
 		}
 
@@ -191,8 +191,11 @@ class write_buffer
 		 * @pre		Require qd_lock to be held
 		 */
 		void _add(T val) {
+			// {cache_index, cache_index_homenode} buffer pair to be added
+			_buffer_pair buf_pair(val, get_homenode(cacheControl[val].tag));
+
 			// For debug builds, check for duplicate additions
-			assert(!has(val));
+			assert(!has(buf_pair));
 
 			// If the buffer is full, write back _write_back_size indices
 			if(size() >= _max_size){
@@ -200,7 +203,7 @@ class write_buffer
 			}
 
 			// Add val to the buffer
-			emplace(val);
+			emplace(buf_pair);
 			std::lock_guard<std::mutex> stat_lock(_stat_mutex);
 			_page_count++;
 		}
@@ -220,8 +223,11 @@ class write_buffer
 		 * @pre		_qd_lock must be taken
 		 */
 		void _erase(T val) {
+			// {cache_index, cache_index_homenode} buffer pair to be erased
+			_buffer_pair buf_pair(val, get_homenode(cacheControl[val].tag));
+
 			// Attempt to get iterator to element equal to val
-			const auto it = _buffer.find(val);
+			const auto it = _buffer.find(buf_pair);
 			// If found, erase it
 			if (it != _buffer.cend()) {
 				_buffer.erase(it);
